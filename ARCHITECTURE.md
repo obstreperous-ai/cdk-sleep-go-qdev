@@ -36,40 +36,32 @@ flowchart TD
         EB[Amazon EventBridge<br/>Event Bus + Rules]
     end
     
-    subgraph Processing["Processing Layer - Step Functions Workflow"]
-        SF[AWS Step Functions<br/>State Machine]
+    subgraph Orchestration["Orchestration Layer"]
+        SF[AWS Step Functions<br/>SleepAudioPipelineStateMachine<br/>Standard Workflow]
         
         subgraph ProcessingSteps["Processing Steps"]
-            V[Validation Lambda<br/>Format/Size Check]
-            M[Metadata Extraction Lambda<br/>Duration/Codec/Bitrate]
-            P[Polly Lambda<br/>Text-to-Speech Generation]
-            BR[Bedrock Lambda<br/>AI Audio Enhancement]
-            T[Transcoding Lambda<br/>Format Optimization]
+            POLLY[Polly Task<br/>synthesizeSpeech<br/>Placeholder Implementation]
         end
     end
     
     subgraph Storage["Storage Layer"]
         OB[S3 Output Bucket<br/>Versioned + Encrypted<br/>Lifecycle Policies]
-        DB[(DynamoDB Table<br/>Metadata Store<br/>user_id, status, duration)]
+        DB[(DynamoDB Table<br/>Metadata Store<br/>Future: user_id, status, duration)]
     end
     
     subgraph Notification["Notification Layer"]
-        SNS_SUCCESS[SNS Topic<br/>Processing Success]
-        SNS_ERROR[SNS Topic<br/>Processing Errors]
+        SNS_SUCCESS[SNS Topic<br/>Future: Processing Success]
+        SNS_ERROR[SNS Topic<br/>Future: Processing Errors]
     end
     
     subgraph Observability["Observability Layer"]
-        CW[CloudWatch Logs<br/>All Lambda Logs]
-        CWM[CloudWatch Metrics<br/>Custom Business Metrics]
-        CWA[CloudWatch Alarms<br/>Error Rate, Duration, DLQ]
-        XR[X-Ray Tracing<br/>Distributed Tracing]
+        CW[CloudWatch Logs<br/>State Machine Execution Logs]
+        XR[X-Ray Tracing<br/>Enabled for State Machine]
     end
     
     subgraph Security["Security & Compliance"]
-        IAM[IAM Roles<br/>Least Privilege]
+        IAM[IAM Roles<br/>Least Privilege<br/>Polly:SynthesizeSpeech]
         KMS[KMS Keys<br/>Encryption at Rest]
-        SM[Secrets Manager<br/>API Keys/Tokens]
-        CT[CloudTrail<br/>Audit Logs]
     end
     
     %% Main Flow
@@ -77,59 +69,48 @@ flowchart TD
     IB -->|S3 Event Notification| EB
     EB -->|Trigger Processing| SF
     
-    SF --> V
-    V -->|Valid| M
-    M --> P
-    P --> BR
-    BR --> T
+    SF --> POLLY
+    POLLY -->|Future: Store| OB
+    POLLY -->|Future: Metadata| DB
+    
+    %% Future Processing Steps (Commented for Phase 2+)
+    %% V[Validation Lambda] --> M[Metadata Extraction]
+    %% M --> P[Polly Lambda]
+    %% P --> BR[Bedrock Lambda]
+    %% BR --> T[Transcoding Lambda]
     
     T -->|Store Processed Audio| OB
     T -->|Store Metadata| DB
     
-    SF -->|Success| SNS_SUCCESS
-    SF -->|Failure| SNS_ERROR
+    SF -->|Future: Success| SNS_SUCCESS
+    SF -->|Future: Failure| SNS_ERROR
     
     SNS_SUCCESS -->|Notify| U
     SNS_ERROR -->|Alert Ops Team| U
     
     %% Cross-cutting concerns
-    SF -.->|Logs| CW
-    V -.->|Logs| CW
-    M -.->|Logs| CW
-    P -.->|Logs| CW
-    BR -.->|Logs| CW
+    POLLY -.->|Logs| CW
     T -.->|Logs| CW
-    
-    SF -.->|Metrics| CWM
-    CWM -.->|Trigger| CWA
     
     SF -.->|Trace| XR
     
+    IAM -.->|Authorize| POLLY
     IAM -.->|Authorize| SF
     KMS -.->|Encrypt/Decrypt| IB
-    KMS -.->|Encrypt/Decrypt| OB
-    KMS -.->|Encrypt/Decrypt| DB
-    SM -.->|Retrieve Secrets| P
-    SM -.->|Retrieve Secrets| BR
-    CT -.->|Audit| IB
-    CT -.->|Audit| OB
+    
+    %% Future integrations
+    %% KMS -.->|Encrypt/Decrypt| DB
     CT -.->|Audit| DB
     
     style U fill:#e1f5ff
     style IB fill:#ffecb3
     style OB fill:#ffecb3
     style EB fill:#c8e6c9
-    style SF fill:#d1c4e9
-    style V fill:#f8bbd0
-    style M fill:#f8bbd0
-    style P fill:#f8bbd0
-    style BR fill:#f8bbd0
+    style POLLY fill:#f8bbd0
     style T fill:#f8bbd0
     style DB fill:#fff9c4
     style SNS_SUCCESS fill:#a5d6a7
     style SNS_ERROR fill:#ef9a9a
-    style CW fill:#e0e0e0
-    style CWM fill:#e0e0e0
     style CWA fill:#e0e0e0
     style XR fill:#e0e0e0
 ```
@@ -186,32 +167,48 @@ flowchart TD
 #### AWS Step Functions State Machine
 
 **Purpose**: Orchestrates multi-step audio processing workflow with error handling, retries, and parallel execution.
+**Current Implementation (Issue #4 - Minimal Skeleton)**:
+
+The state machine currently implements a **minimal skeleton** with basic Amazon Polly integration as the first processing step:
+
+1. **Polly Task** (AWS Service Integration)
+   - Direct service integration using Step Functions' `CallAwsService` task
+   - Placeholder parameters:
+     - Text: "This is a placeholder for sleep audio generation"
+     - VoiceId: "Joanna" (neural voice)
+     - OutputFormat: "mp3"
+     - Engine: "neural"
+   - IAM permissions: `polly:SynthesizeSpeech` (least privilege)
+   - Result stored in `$.pollyResult` for future processing steps
+
+This minimal implementation serves as the foundation for the complete workflow. Future issues will extend the state machine with additional processing steps.
+
 
 **Workflow Design**:
-
+1. **Validation Step** (Lambda) - **Future Implementation**
 1. **Validation Step** (Lambda)
    - Validates audio file format and codec
    - Checks file size limits (min/max)
    - Verifies file integrity (not corrupted)
    - Extracts basic file information
    - **Error Handling**: Fails fast if file is invalid, triggers SNS error notification
-
+2. **Metadata Extraction Step** (Lambda) - **Future Implementation**
 2. **Metadata Extraction Step** (Lambda)
    - Extracts audio metadata: duration, bitrate, sample rate, codec
    - Identifies audio characteristics: frequency distribution, amplitude patterns
    - Calculates audio quality metrics
    - Stores preliminary metadata in DynamoDB with status `PROCESSING`
    - **Parallel Execution**: Can run in parallel with validation for text files
-
+3. **Amazon Polly Integration** (Current - Service Integration)
 3. **Amazon Polly Integration** (Lambda)
    - **Use Case**: Converts text files into natural-sounding speech for sleep stories, meditations
    - **Voice Selection**: Neural voices optimized for calm, soothing narration (e.g., Joanna, Matthew)
    - **SSML Support**: Speech Synthesis Markup Language for fine-tuned control (pauses, emphasis, breathing)
-   - **Output Format**: High-quality MP3 or OGG at 48kHz sample rate
+    - **Current**: Placeholder implementation with basic synthesis call
    - **Streaming**: Supports long-form content via asynchronous synthesis tasks
-   - **Cost Optimization**: Caches common phrases, uses standard voices where appropriate
+    - **Security**: API access via IAM role with least-privilege permissions, no hardcoded credentials
    - **Credentials**: API access via IAM role, no hardcoded credentials
-
+4. **AWS Bedrock Integration** (Lambda) - **Future Implementation**
 4. **AWS Bedrock Integration** (Lambda)
    - **Use Case**: AI-enhanced audio generation for ambient sleep sounds, soundscapes
    - **Models**: Leverages foundation models for:
@@ -223,7 +220,7 @@ flowchart TD
    - **Fallback Logic**: Falls back to Polly or pre-generated sounds if Bedrock is unavailable
    - **Rate Limiting**: Implements exponential backoff for API throttling
    - **Credentials**: API keys stored in AWS Secrets Manager, retrieved at runtime
-
+5. **Transcoding/Optimization Step** (Lambda) - **Future Implementation**
 5. **Transcoding/Optimization Step** (Lambda)
    - Converts audio to optimized formats for streaming (e.g., AAC, Opus)
    - Normalizes audio levels for consistent volume
@@ -231,12 +228,12 @@ flowchart TD
    - Creates multiple quality tiers (high/medium/low bitrate)
    - Generates waveform images for UI visualization
 
-**Step Functions Features**:
-- **Error Handling**: Catch states for each step with retry logic (exponential backoff)
-- **Timeouts**: Per-step timeouts to prevent hung executions
-- **Parallel States**: Runs independent tasks concurrently for faster processing
-- **Choice States**: Conditional branching based on file type or processing results
-- **Map States**: Batch processing for multiple files or quality tiers
+- **CloudWatch Logs**: All execution logs sent to dedicated log group (`/aws/vendedlogs/states/SleepAudioPipeline`)
+- **X-Ray Tracing**: Enabled for distributed tracing and performance analysis
+- **IAM Least Privilege**: State machine execution role has minimal permissions (currently only `polly:SynthesizeSpeech`)
+- **Standard Workflow**: Using Standard (not Express) for audit trail and visual monitoring
+- **Timeout**: 5-minute timeout to prevent hung executions
+- **Future**: Error handling with catch states, retry logic, parallel states, choice states will be added in subsequent issues
 - **Wait States**: Implements backoff for rate-limited external APIs (Bedrock, Polly)
 
 **Why Step Functions?**
@@ -244,7 +241,14 @@ flowchart TD
 - Built-in retry and error handling
 - Long-running workflows (up to 1 year)
 - Automatic state management and checkpointing
-- Audit trail of all state transitions
+- Declarative workflow definition with no orchestration boilerplate
+
+**Current Limitations (To Be Addressed in Future Issues)**:
+- No DynamoDB metadata storage yet
+- No error handling or retry logic
+- No output file storage
+- Placeholder Polly parameters (not reading from event input)
+- No SNS notifications
 - No code for orchestration logic
 
 ### Alternative: Lambda-Only Processing
@@ -558,41 +562,43 @@ For simple, single-step processing, direct Lambda invocation from EventBridge is
 ## Implementation Roadmap
 
 This architecture will be implemented incrementally following strict TDD principles:
+**Phase 1: Foundation** (Issues #1-4) ✅
+- ✅ Issue #1: Project scaffolding and CDK initialization
+- ✅ Issue #2: S3 input/output buckets with encryption and versioning
+- ✅ Issue #3: EventBridge rule for S3 Object Created events
+- ✅ Issue #4: Step Functions state machine skeleton + minimal Polly integration
 
-**Phase 1: Foundation** (Issues #3-5)
-- S3 input/output buckets with encryption and versioning
-- EventBridge event bus and rules
-- Basic DynamoDB table schema
+**Phase 2: State Machine Expansion** (Issues #5-10)
+- Issue #5: DynamoDB metadata table + input/output handling in state machine
+- Issue #6: Validation step (format, size, integrity checks)
+- Issue #7: Metadata extraction step
+- Issue #8: Enhanced Polly integration (read from event, store to S3)
+- Issue #9: Error handling and retry logic
+- Issue #10: SNS notifications for success/failure
 - SNS topics for notifications
-
-**Phase 2: Core Processing** (Issues #6-10)
-- Step Functions state machine scaffold
-- Validation Lambda with tests
-- Metadata extraction Lambda with tests
-- Basic transcoding Lambda with tests
+**Phase 3: Advanced Processing** (Issues #11-15)
+- AWS Bedrock integration for AI-generated audio
+- Transcoding and optimization pipeline
+- Parallel processing with Map states
+- Choice states for conditional logic
 - Integration tests for end-to-end flow
 
-**Phase 3: AI Integration** (Issues #11-15)
-- Amazon Polly integration for TTS
-- AWS Bedrock integration for AI-generated audio
-- Advanced audio processing pipelines
-- Quality assurance and validation
-
-**Phase 4: Observability** (Issues #16-20)
-- CloudWatch Logs configuration
-- Custom metrics and dashboards
+**Phase 4: Observability** (Issues #16-20) (Previous "Phase 2")
+- CloudWatch custom metrics and dashboards
 - CloudWatch Alarms for critical paths
-- X-Ray distributed tracing
+- Advanced X-Ray tracing configuration
 - Cost monitoring and optimization
-
+- Integration tests for end-to-end flow
+**Phase 5: Multi-Environment & Production Readiness** (Issues #21-25)
 **Phase 5: Multi-Environment** (Issues #21-25)
 - CDK context-based configuration
 - Environment-specific resource naming
 - Deployment pipelines per environment
+- Performance testing and optimization
 - Blue/green deployment strategy
 
 ---
-
-**Document Version**: 1.0.0  
+**Document Version**: 1.1.0  
+**Last Updated**: 2024-01-XX (Issue #4: Step Functions + Polly Integration)  
 **Last Updated**: 2024 (Initial Architecture Design)  
 **Status**: Living Document - Updated with each implementation phase
