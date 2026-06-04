@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
@@ -44,14 +45,84 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	})
 
 	// Create a placeholder Lambda function for EventBridge target
-	// Create CloudWatch Log Group for Step Functions state machine
+	// ========== Issue #5: DynamoDB Table for Metadata Storage ==========
+	// Create DynamoDB table for storing audio pipeline metadata
+	metadataTable := awsdynamodb.NewTable(stack, jsii.String("SleepAudioMetadataTable"), &awsdynamodb.TableProps{
+		TableName: jsii.String("SleepAudioMetadataTable"),
+		PartitionKey: &awsdynamodb.Attribute{
+			Name: jsii.String("audioId"),
+			Type: awsdynamodb.AttributeType_STRING,
+		},
+		BillingMode:         awsdynamodb.BillingMode_PAY_PER_REQUEST,
+		Encryption:          awsdynamodb.TableEncryption_AWS_MANAGED,
+		PointInTimeRecovery: jsii.Bool(true),
+		RemovalPolicy:       awscdk.RemovalPolicy_RETAIN,
+	})
+
 	stateMachineLogGroup := awslogs.NewLogGroup(stack, jsii.String("StateMachineLogGroup"), &awslogs.LogGroupProps{
 		LogGroupName:  jsii.String("/aws/vendedlogs/states/SleepAudioPipeline"),
 		Retention:     awslogs.RetentionDays_ONE_WEEK,
 		RemovalPolicy: awscdk.RemovalPolicy_DESTROY,
 
+	})
+
+	// ========== Issue #5: State Machine with DynamoDB Integration ==========
+	// Task 1: Write initial metadata record to DynamoDB when pipeline starts
+	writeInitialMetadataTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("WriteInitialMetadata"), &awsstepfunctionstasks.CallAwsServiceProps{
+		Service: jsii.String("dynamodb"),
+		Action:  jsii.String("putItem"),
+		Parameters: &map[string]interface{}{
+			"TableName": metadataTable.TableName(),
+			"Item": map[string]interface{}{
+				"audioId": map[string]interface{}{
+					"S.$": "$.detail.object.key",
+				},
+				"status": map[string]interface{}{
+					"S": "PROCESSING",
+				},
+				"inputBucket": map[string]interface{}{
+					"S.$": "$.detail.bucket.name",
+				},
+				"inputKey": map[string]interface{}{
+					"S.$": "$.detail.object.key",
+				},
+				"createdAt": map[string]interface{}{
+					"S.$": "$$.State.EnteredTime",
+				},
+			},
+		},
+		IamResources: &[]*string{metadataTable.TableArn()},
+		ResultPath:   jsii.String("$.dynamoDbResult"),
+	})
+
+	// Task 2: Update metadata after successful processing
+	updateMetadataSuccessTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("UpdateMetadataSuccess"), &awsstepfunctionstasks.CallAwsServiceProps{
+		Service: jsii.String("dynamodb"),
+		Action:  jsii.String("updateItem"),
+		Parameters: &map[string]interface{}{
+			"TableName": metadataTable.TableName(),
+			"Key": map[string]interface{}{
+				"audioId": map[string]interface{}{
+					"S.$": "$.detail.object.key",
+				},
+			},
+			"UpdateExpression": "SET #status = :completed, updatedAt = :timestamp",
+			"ExpressionAttributeNames": map[string]interface{}{
+				"#status": "status",
+			},
+			"ExpressionAttributeValues": map[string]interface{}{
+				":completed": map[string]interface{}{
+					"S": "COMPLETED",
+				},
+				":timestamp": map[string]interface{}{
+					"S.$": "$$.State.EnteredTime",
+				},
+			},
+		},
+		IamResources: &[]*string{metadataTable.TableArn()},
+		ResultPath:   jsii.String("$.updateResult"),
+	})
 	// Grant read permissions to placeholder Lambda
-	// Create a minimal Polly task using CallAwsService for Amazon Polly integration
 	// This is a placeholder implementation - real audio generation logic comes later
 	pollyTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("PollyTask"), &awsstepfunctionstasks.CallAwsServiceProps{
 		Service:      jsii.String("polly"),
@@ -67,8 +138,10 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	})
 
 	// Define the state machine with the Polly task
-	definition := pollyTask
-
+	// Define the state machine workflow: Write metadata -> Process with Polly -> Update metadata
+	definition := writeInitialMetadataTask.
+		Next(pollyTask).
+		Next(updateMetadataSuccessTask)
 	// Create the Step Functions state machine for audio processing pipeline
 	stateMachine := awsstepfunctions.NewStateMachine(stack, jsii.String("SleepAudioPipelineStateMachine"), &awsstepfunctions.StateMachineProps{
 		StateMachineName: jsii.String("SleepAudioPipelineStateMachine"),
@@ -86,6 +159,10 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	inputBucket.GrantRead(stateMachine, nil)
 	outputBucket.GrantWrite(stateMachine, nil)
 	// Create EventBridge Rule to trigger on S3 Object Created events
+
+	// Grant the state machine permissions to read/write DynamoDB table
+	metadataTable.GrantReadWriteData(stateMachine)
+
 	rule := awsevents.NewRule(stack, jsii.String("SleepAudioProcessingRule"), &awsevents.RuleProps{
 		Description: jsii.String("Triggers audio processing pipeline when new files are uploaded to the input bucket"),
 		EventPattern: &awsevents.EventPattern{
@@ -101,8 +178,6 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	})
 
 	// Add placeholder Lambda as target
-	rule.AddTarget(awseventstargets.NewLambdaFunction(placeholderLambda, &awseventstargets.LambdaFunctionProps{}))
-	// Add Step Functions state machine as target for EventBridge rule
 	// Pass S3 event data (bucket, key, etc.) as input to the state machine
 	rule.AddTarget(awseventstargets.NewSfnStateMachine(stateMachine, &awseventstargets.SfnStateMachineProps{
 		Input: awsevents.RuleTargetInput_FromEventPath(jsii.String("$")),
@@ -115,12 +190,16 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 		Value:       outputBucket.BucketName(),
 		Description: jsii.String("Name of the S3 bucket for processed audio files"),
 	})
-	return stack
-}
 	awscdk.NewCfnOutput(stack, jsii.String("StateMachineArn"), &awscdk.CfnOutputProps{
 		Value:       stateMachine.StateMachineArn(),
 		Description: jsii.String("ARN of the Step Functions state machine"),
 	})
+	awscdk.NewCfnOutput(stack, jsii.String("MetadataTableName"), &awscdk.CfnOutputProps{
+		Value:       metadataTable.TableName(),
+		Description: jsii.String("Name of the DynamoDB table for audio metadata"),
+	})
+	return stack
+}
 
 func main() {
 	defer jsii.Close()
