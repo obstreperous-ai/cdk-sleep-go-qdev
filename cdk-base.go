@@ -4,9 +4,10 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
-	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
-	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsstepfunctions"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsstepfunctionstasks"
 
 	"github.com/aws/constructs-go/constructs/v10"
 	"github.com/aws/jsii-runtime-go"
@@ -43,23 +44,47 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	})
 
 	// Create a placeholder Lambda function for EventBridge target
-	// This will be replaced with Step Functions in a future issue
-	placeholderLambda := awslambda.NewFunction(stack, jsii.String("PlaceholderProcessorFunction"), &awslambda.FunctionProps{
-		Runtime: awslambda.Runtime_PROVIDED_AL2023(),
-		Handler: jsii.String("bootstrap"),
-		Code:    awslambda.Code_FromInline(jsii.String("# Placeholder - will be replaced with Step Functions")),
-		Description: jsii.String("Placeholder Lambda for EventBridge target - will be replaced with Step Functions state machine"),
-		Timeout:     awscdk.Duration_Seconds(jsii.Number(30)),
-		LogRetention: awslogs.RetentionDays_ONE_WEEK,
-		Environment: &map[string]*string{
-			"OUTPUT_BUCKET": outputBucket.BucketName(),
-		},
-	})
+	// Create CloudWatch Log Group for Step Functions state machine
+	stateMachineLogGroup := awslogs.NewLogGroup(stack, jsii.String("StateMachineLogGroup"), &awslogs.LogGroupProps{
+		LogGroupName:  jsii.String("/aws/vendedlogs/states/SleepAudioPipeline"),
+		Retention:     awslogs.RetentionDays_ONE_WEEK,
+		RemovalPolicy: awscdk.RemovalPolicy_DESTROY,
 
 	// Grant read permissions to placeholder Lambda
-	inputBucket.GrantRead(placeholderLambda, nil)
-	outputBucket.GrantWrite(placeholderLambda, nil)
+	// Create a minimal Polly task using CallAwsService for Amazon Polly integration
+	// This is a placeholder implementation - real audio generation logic comes later
+	pollyTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("PollyTask"), &awsstepfunctionstasks.CallAwsServiceProps{
+		Service:      jsii.String("polly"),
+		Action:       jsii.String("synthesizeSpeech"),
+		IamResources: &[]*string{jsii.String("*")},
+		Parameters: &map[string]interface{}{
+			"Text":         jsii.String("This is a placeholder for sleep audio generation"),
+			"VoiceId":      jsii.String("Joanna"),
+			"OutputFormat": jsii.String("mp3"),
+			"Engine":       jsii.String("neural"),
+		},
+		ResultPath: jsii.String("$.pollyResult"),
+	})
 
+	// Define the state machine with the Polly task
+	definition := pollyTask
+
+	// Create the Step Functions state machine for audio processing pipeline
+	stateMachine := awsstepfunctions.NewStateMachine(stack, jsii.String("SleepAudioPipelineStateMachine"), &awsstepfunctions.StateMachineProps{
+		StateMachineName: jsii.String("SleepAudioPipelineStateMachine"),
+		DefinitionBody:   awsstepfunctions.DefinitionBody_FromChainable(definition),
+		StateMachineType: awsstepfunctions.StateMachineType_STANDARD,
+		Logs: &awsstepfunctions.LogOptions{
+			Destination: stateMachineLogGroup,
+			Level:       awsstepfunctions.LogLevel_ALL,
+		},
+		TracingEnabled: jsii.Bool(true),
+		Timeout:        awscdk.Duration_Minutes(jsii.Number(5)),
+	})
+
+	// Grant the state machine read access to input bucket and write access to output bucket
+	inputBucket.GrantRead(stateMachine, nil)
+	outputBucket.GrantWrite(stateMachine, nil)
 	// Create EventBridge Rule to trigger on S3 Object Created events
 	rule := awsevents.NewRule(stack, jsii.String("SleepAudioProcessingRule"), &awsevents.RuleProps{
 		Description: jsii.String("Triggers audio processing pipeline when new files are uploaded to the input bucket"),
@@ -77,8 +102,11 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 
 	// Add placeholder Lambda as target
 	rule.AddTarget(awseventstargets.NewLambdaFunction(placeholderLambda, &awseventstargets.LambdaFunctionProps{}))
-
-	// Output bucket names for reference
+	// Add Step Functions state machine as target for EventBridge rule
+	// Pass S3 event data (bucket, key, etc.) as input to the state machine
+	rule.AddTarget(awseventstargets.NewSfnStateMachine(stateMachine, &awseventstargets.SfnStateMachineProps{
+		Input: awsevents.RuleTargetInput_FromEventPath(jsii.String("$")),
+	}))
 	awscdk.NewCfnOutput(stack, jsii.String("InputBucketName"), &awscdk.CfnOutputProps{
 		Value:       inputBucket.BucketName(),
 		Description: jsii.String("Name of the S3 bucket for raw audio file uploads"),
@@ -89,6 +117,10 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	})
 	return stack
 }
+	awscdk.NewCfnOutput(stack, jsii.String("StateMachineArn"), &awscdk.CfnOutputProps{
+		Value:       stateMachine.StateMachineArn(),
+		Description: jsii.String("ARN of the Step Functions state machine"),
+	})
 
 func main() {
 	defer jsii.Close()

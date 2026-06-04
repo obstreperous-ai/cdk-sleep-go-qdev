@@ -146,3 +146,113 @@ func TestStackSnapshot(t *testing.T) {
 		t.Fatal("Expected template to be generated, got nil")
 	}
 }
+
+// TestStepFunctionsStateMachineExists verifies that Step Functions state machine is created
+func TestStepFunctionsStateMachineExists(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify Step Functions state machine exists
+	template.ResourceCountIs(jsii.String("AWS::StepFunctions::StateMachine"), jsii.Number(1))
+}
+
+// TestStepFunctionsStateMachineHasPollyTask verifies state machine contains Polly integration
+func TestStepFunctionsStateMachineHasPollyTask(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine definition contains Polly service integration
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*polly.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestStepFunctionsStateMachineHasCloudWatchLogs verifies logging is enabled
+func TestStepFunctionsStateMachineHasCloudWatchLogs(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine has CloudWatch Logs enabled
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"LoggingConfiguration": map[string]interface{}{
+			"Level": "ALL",
+		},
+	})
+}
+
+// TestStepFunctionsExecutionRoleHasPollyPermissions verifies IAM role has Polly permissions
+func TestStepFunctionsExecutionRoleHasPollyPermissions(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify IAM role has Polly permissions (least privilege)
+	template.HasResourceProperties(jsii.String("AWS::IAM::Policy"), map[string]interface{}{
+		"PolicyDocument": map[string]interface{}{
+			"Statement": assertions.Match_ArrayWith([]interface{}{
+				map[string]interface{}{
+					"Action": "polly:SynthesizeSpeech",
+					"Effect": "Allow",
+				},
+			}),
+		},
+	})
+}
+
+// TestEventBridgeRuleTargetsStateMachine verifies EventBridge rule targets Step Functions
+func TestEventBridgeRuleTargetsStateMachine(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify EventBridge rule has Step Functions state machine as target
+	template.HasResourceProperties(jsii.String("AWS::Events::Rule"), map[string]interface{}{
+		"Targets": assertions.Match_ArrayWith([]interface{}{
+			map[string]interface{}{
+				"Arn": map[string]interface{}{
+					"Ref": assertions.Match_StringLikeRegexp(jsii.String(".*StateMachine.*")),
+				},
+			},
+		}),
+	})
+}
