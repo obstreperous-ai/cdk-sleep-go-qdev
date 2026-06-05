@@ -413,3 +413,143 @@ func TestStateMachineRoleHasDynamoDBPermissions(t *testing.T) {
 		},
 	})
 }
+
+// ========== Issue #6: SNS Notifications and Error Handling ==========
+
+// TestSNSTopicsExist verifies that SNS topics are created for notifications
+func TestSNSTopicsExist(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify that exactly 2 SNS topics exist (success and failure)
+	template.ResourceCountIs(jsii.String("AWS::SNS::Topic"), jsii.Number(2))
+}
+
+// TestSNSTopicsHaveEncryption verifies SNS topics are encrypted
+func TestSNSTopicsHaveEncryption(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify SNS topics have KMS encryption enabled
+	template.HasResourceProperties(jsii.String("AWS::SNS::Topic"), map[string]interface{}{
+		"KmsMasterKeyId": map[string]interface{}{
+			"Fn::GetAtt": assertions.Match_ArrayWith([]interface{}{
+				assertions.Match_StringLikeRegexp(jsii.String(".*Key.*")),
+			}),
+		},
+	})
+}
+
+// TestStateMachineHasSNSPublishTasks verifies state machine includes SNS publish tasks
+func TestStateMachineHasSNSPublishTasks(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine definition contains SNS publish actions
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*sns.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestStateMachineHasErrorHandling verifies state machine includes error handling
+func TestStateMachineHasErrorHandling(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine definition contains Catch error handling
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*Catch.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestStateMachineRoleHasSNSPublishPermissions verifies IAM role has SNS publish permissions
+func TestStateMachineRoleHasSNSPublishPermissions(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify IAM role has SNS:Publish permissions
+	template.HasResourceProperties(jsii.String("AWS::IAM::Policy"), map[string]interface{}{
+		"PolicyDocument": map[string]interface{}{
+			"Statement": assertions.Match_ArrayWith([]interface{}{
+				map[string]interface{}{
+					"Action": "sns:Publish",
+					"Effect": "Allow",
+				},
+			}),
+		},
+	})
+}
+
+// TestDynamoDBUpdateTasksForFailure verifies state machine includes DynamoDB update for failures
+func TestDynamoDBUpdateTasksForFailure(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine definition contains DynamoDB updateItem for FAILED status
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*FAILED.*")),
+				}),
+			},
+		},
+	})
+}
