@@ -256,3 +256,160 @@ func TestEventBridgeRuleTargetsStateMachine(t *testing.T) {
 		}),
 	})
 }
+
+// ========== Issue #5: DynamoDB Table + State Machine Input/Output Handling ==========
+
+// TestDynamoDBMetadataTableExists verifies the DynamoDB table is created
+func TestDynamoDBMetadataTableExists(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify DynamoDB table exists
+	template.ResourceCountIs(jsii.String("AWS::DynamoDB::Table"), jsii.Number(1))
+}
+
+// TestDynamoDBTableHasCorrectSchema verifies the DynamoDB table has correct key schema
+func TestDynamoDBTableHasCorrectSchema(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify table has audioId as partition key
+	template.HasResourceProperties(jsii.String("AWS::DynamoDB::Table"), map[string]interface{}{
+		"KeySchema": []interface{}{
+			map[string]interface{}{
+				"AttributeName": "audioId",
+				"KeyType":       "HASH",
+			},
+		},
+		"AttributeDefinitions": assertions.Match_ArrayWith([]interface{}{
+			map[string]interface{}{
+				"AttributeName": "audioId",
+				"AttributeType": "S",
+			},
+		}),
+	})
+}
+
+// TestDynamoDBTableHasEncryption verifies the DynamoDB table has encryption enabled
+func TestDynamoDBTableHasEncryption(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify table has server-side encryption enabled
+	template.HasResourceProperties(jsii.String("AWS::DynamoDB::Table"), map[string]interface{}{
+		"SSESpecification": map[string]interface{}{
+			"SSEEnabled": true,
+		},
+	})
+}
+
+// TestDynamoDBTableHasOnDemandBilling verifies billing mode is on-demand
+func TestDynamoDBTableHasOnDemandBilling(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify table uses on-demand billing mode
+	template.HasResourceProperties(jsii.String("AWS::DynamoDB::Table"), map[string]interface{}{
+		"BillingMode": "PAY_PER_REQUEST",
+	})
+}
+
+// TestDynamoDBTableHasPointInTimeRecovery verifies PITR is enabled
+func TestDynamoDBTableHasPointInTimeRecovery(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify point-in-time recovery is enabled
+	template.HasResourceProperties(jsii.String("AWS::DynamoDB::Table"), map[string]interface{}{
+		"PointInTimeRecoverySpecification": map[string]interface{}{
+			"PointInTimeRecoveryEnabled": true,
+		},
+	})
+}
+
+// TestStateMachineHasDynamoDBTask verifies state machine includes DynamoDB integration
+func TestStateMachineHasDynamoDBTask(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine definition contains DynamoDB service integration
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*dynamodb.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestStateMachineRoleHasDynamoDBPermissions verifies IAM role has DynamoDB permissions
+func TestStateMachineRoleHasDynamoDBPermissions(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify IAM role has DynamoDB PutItem and UpdateItem permissions
+	template.HasResourceProperties(jsii.String("AWS::IAM::Policy"), map[string]interface{}{
+		"PolicyDocument": map[string]interface{}{
+			"Statement": assertions.Match_ArrayWith([]interface{}{
+				map[string]interface{}{
+					"Action": assertions.Match_ArrayWith([]interface{}{
+						"dynamodb:PutItem",
+					}),
+					"Effect": "Allow",
+				},
+			}),
+		},
+	})
+}
