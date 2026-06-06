@@ -169,11 +169,16 @@ flowchart TD
 **Purpose**: Orchestrates multi-step audio processing workflow with error handling, retries, and parallel execution.
 **Current Implementation (Issue #4 - Minimal Skeleton)**:
 
-The state machine currently implements a **minimal skeleton** with basic Amazon Polly integration as the first processing step:
 
-1. **Polly Task** (AWS Service Integration)
+**Current Implementation (Issues #4-6)**:
    - Direct service integration using Step Functions' `CallAwsService` task
-   - Placeholder parameters:
+The state machine currently implements:
+
+1. **DynamoDB Write Initial Metadata** (AWS Service Integration - Issue #5)
+   - Writes initial record with status = "PROCESSING"
+   - Stores audioId, inputBucket, inputKey, createdAt timestamp
+
+2. **Polly Task** (AWS Service Integration - Issue #4)
      - Text: "This is a placeholder for sleep audio generation"
      - VoiceId: "Joanna" (neural voice)
      - OutputFormat: "mp3"
@@ -183,9 +188,25 @@ The state machine currently implements a **minimal skeleton** with basic Amazon 
 
 This minimal implementation serves as the foundation for the complete workflow. Future issues will extend the state machine with additional processing steps.
 
+   - **Error Handling**: Includes Catch block that triggers failure path
 
-**Workflow Design**:
+3. **DynamoDB Update Metadata - Success Path** (Issue #5)
+   - Updates status to "COMPLETED" with timestamp
+   - Only executes if Polly task succeeds
 1. **Validation Step** (Lambda) - **Future Implementation**
+4. **SNS Publish Success** (Issue #6)
+   - Publishes notification to completion topic
+   - Includes audioId in message
+
+5. **DynamoDB Update Metadata - Failure Path** (Issue #6)
+   - Updates status to "FAILED" with timestamp and error details
+   - Triggered by Catch block on Polly task errors
+
+6. **SNS Publish Failure** (Issue #6)
+   - Publishes notification to failure topic
+   - Includes audioId and error message
+
+This implementation provides the foundation with error handling and status tracking. Future issues will extend the state machine with additional processing steps.
 1. **Validation Step** (Lambda)
    - Validates audio file format and codec
    - Checks file size limits (min/max)
@@ -235,6 +256,11 @@ This minimal implementation serves as the foundation for the complete workflow. 
 - **Timeout**: 5-minute timeout to prevent hung executions
 - **Future**: Error handling with catch states, retry logic, parallel states, choice states will be added in subsequent issues
 - **Wait States**: Implements backoff for rate-limited external APIs (Bedrock, Polly)
+
+**Current Features (Issue #6)**:
+- **Error Handling**: Catch blocks on Polly task route to failure path
+- **Status Tracking**: DynamoDB updates for PROCESSING, COMPLETED, FAILED states
+- **Notifications**: SNS topics for success and failure notifications (encrypted with KMS)
 
 **Why Step Functions?**
 - Visual workflow design and monitoring
@@ -326,15 +352,17 @@ For simple, single-step processing, direct Lambda invocation from EventBridge is
 1. **Processing Success Topic**
    - **Subscribers**: User notification service, analytics service, monitoring dashboard
    - **Message Format**: JSON with audio_id, user_id, processed_file_url, duration, format
-   - **Use Cases**: Notify users when audio is ready, trigger downstream workflows (e.g., mobile push notifications)
+1. **Processing Success Topic** (`SleepAudioPipelineCompleted` - Issue #6)
 
 2. **Processing Error Topic**
    - **Subscribers**: Operations team email/SMS, PagerDuty, CloudWatch alarm actions
+   - **Encryption**: KMS encryption with dedicated key
    - **Message Format**: JSON with audio_id, user_id, error_type, error_message, stack_trace
-   - **Use Cases**: Alert ops team for manual intervention, trigger automated remediation
+2. **Processing Error Topic** (`SleepAudioPipelineFailed` - Issue #6)
 
 **Configuration**:
 - **Encryption**: In-transit and at-rest encryption
+   - **Encryption**: KMS encryption with dedicated key
 - **Access Policy**: Least-privilege IAM policies
 - **DLQ**: Dead-letter queue for failed message deliveries
 - **Message Filtering**: Subscription filters for targeted notifications

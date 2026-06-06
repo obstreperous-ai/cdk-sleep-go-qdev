@@ -5,8 +5,10 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awskms"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awssns"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsstepfunctions"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsstepfunctionstasks"
 
@@ -122,6 +124,86 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 		IamResources: &[]*string{metadataTable.TableArn()},
 		ResultPath:   jsii.String("$.updateResult"),
 	})
+
+	// ========== Issue #6: SNS Topics for Notifications ==========
+	// Create KMS key for SNS topic encryption
+	snsEncryptionKey := awskms.NewKey(stack, jsii.String("SNSEncryptionKey"), &awskms.KeyProps{
+		Description:       jsii.String("KMS key for encrypting SNS topics"),
+		EnableKeyRotation: jsii.Bool(true),
+		RemovalPolicy:     awscdk.RemovalPolicy_RETAIN,
+	})
+
+	// Create SNS topic for successful pipeline completion
+	completionTopic := awssns.NewTopic(stack, jsii.String("SleepAudioPipelineCompleted"), &awssns.TopicProps{
+		TopicName:   jsii.String("SleepAudioPipelineCompleted"),
+		DisplayName: jsii.String("Sleep Audio Pipeline Completed Notifications"),
+		MasterKey:   snsEncryptionKey,
+	})
+
+	// Create SNS topic for pipeline failures
+	failureTopic := awssns.NewTopic(stack, jsii.String("SleepAudioPipelineFailed"), &awssns.TopicProps{
+		TopicName:   jsii.String("SleepAudioPipelineFailed"),
+		DisplayName: jsii.String("Sleep Audio Pipeline Failed Notifications"),
+		MasterKey:   snsEncryptionKey,
+	})
+
+	// Task 3: Update metadata when pipeline fails
+	updateMetadataFailureTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("UpdateMetadataFailure"), &awsstepfunctionstasks.CallAwsServiceProps{
+		Service: jsii.String("dynamodb"),
+		Action:  jsii.String("updateItem"),
+		Parameters: &map[string]interface{}{
+			"TableName": metadataTable.TableName(),
+			"Key": map[string]interface{}{
+				"audioId": map[string]interface{}{
+					"S.$": "$.detail.object.key",
+				},
+			},
+			"UpdateExpression": "SET #status = :failed, updatedAt = :timestamp, errorMessage = :error",
+			"ExpressionAttributeNames": map[string]interface{}{
+				"#status": "status",
+			},
+			"ExpressionAttributeValues": map[string]interface{}{
+				":failed": map[string]interface{}{
+					"S": "FAILED",
+				},
+				":timestamp": map[string]interface{}{
+					"S.$": "$$.State.EnteredTime",
+				},
+				":error": map[string]interface{}{
+					"S.$": "$.Error",
+				},
+			},
+		},
+		IamResources: &[]*string{metadataTable.TableArn()},
+		ResultPath:   jsii.String("$.updateResult"),
+	})
+
+	// Task 4: Publish success notification to SNS
+	publishSuccessTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("PublishSuccess"), &awsstepfunctionstasks.CallAwsServiceProps{
+		Service: jsii.String("sns"),
+		Action:  jsii.String("publish"),
+		Parameters: &map[string]interface{}{
+			"TopicArn": completionTopic.TopicArn(),
+			"Message.$": "States.Format('Pipeline completed successfully for audioId: {}', $.detail.object.key)",
+			"Subject":  jsii.String("Sleep Audio Pipeline Completed"),
+		},
+		IamResources: &[]*string{completionTopic.TopicArn()},
+		ResultPath:   jsii.String("$.snsResult"),
+	})
+
+	// Task 5: Publish failure notification to SNS
+	publishFailureTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("PublishFailure"), &awsstepfunctionstasks.CallAwsServiceProps{
+		Service: jsii.String("sns"),
+		Action:  jsii.String("publish"),
+		Parameters: &map[string]interface{}{
+			"TopicArn": failureTopic.TopicArn(),
+			"Message.$": "States.Format('Pipeline failed for audioId: {} with error: {}', $.detail.object.key, $.Error)",
+			"Subject":  jsii.String("Sleep Audio Pipeline Failed"),
+		},
+		IamResources: &[]*string{failureTopic.TopicArn()},
+		ResultPath:   jsii.String("$.snsResult"),
+	})
+
 	// Grant read permissions to placeholder Lambda
 	// This is a placeholder implementation - real audio generation logic comes later
 	pollyTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("PollyTask"), &awsstepfunctionstasks.CallAwsServiceProps{
@@ -137,11 +219,18 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 		ResultPath: jsii.String("$.pollyResult"),
 	})
 
-	// Define the state machine with the Polly task
-	// Define the state machine workflow: Write metadata -> Process with Polly -> Update metadata
+	// Add error handling to Polly task - if it fails, update DDB and publish to failure topic
+	pollyTask.AddCatch(updateMetadataFailureTask.Next(publishFailureTask), &awsstepfunctions.CatchProps{
+		ResultPath: jsii.String("$.error"),
+	})
+
+	// Define the state machine workflow with error handling:
+	// Write metadata -> Process with Polly (with error handling) -> Update metadata to COMPLETED -> Publish success
 	definition := writeInitialMetadataTask.
 		Next(pollyTask).
-		Next(updateMetadataSuccessTask)
+		Next(updateMetadataSuccessTask).
+		Next(publishSuccessTask)
+
 	// Create the Step Functions state machine for audio processing pipeline
 	stateMachine := awsstepfunctions.NewStateMachine(stack, jsii.String("SleepAudioPipelineStateMachine"), &awsstepfunctions.StateMachineProps{
 		StateMachineName: jsii.String("SleepAudioPipelineStateMachine"),
