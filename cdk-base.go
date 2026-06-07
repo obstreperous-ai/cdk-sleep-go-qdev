@@ -5,6 +5,7 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awskms"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
@@ -69,6 +70,27 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	})
 
 	// ========== Issue #5: State Machine with DynamoDB Integration ==========
+	// ========== Issue #7: Lambda Function for Audio Processing ==========
+	// Create Lambda function for audio processing, metadata enrichment, or validation
+	audioProcessorFunction := awslambda.NewFunction(stack, jsii.String("SleepAudioProcessor"), &awslambda.FunctionProps{
+		FunctionName: jsii.String("SleepAudioProcessor"),
+		Runtime:      awslambda.Runtime_PYTHON_3_12(),
+		Handler:      jsii.String("handler.lambda_handler"),
+		Code:         awslambda.Code_FromAsset(jsii.String("lambda/audio-processor"), nil),
+		Environment: &map[string]*string{
+			"METADATA_TABLE_NAME": metadataTable.TableName(),
+		},
+		Timeout:     awscdk.Duration_Seconds(jsii.Number(30)),
+		MemorySize:  jsii.Number(256),
+		Description: jsii.String("Processes audio files, enriches metadata, and performs validation"),
+	})
+
+	// Grant Lambda function read/write permissions to DynamoDB table
+	metadataTable.GrantReadWriteData(audioProcessorFunction)
+
+	// Grant Lambda function read access to input bucket (for future file validation)
+	inputBucket.GrantRead(audioProcessorFunction, nil)
+
 	// Task 1: Write initial metadata record to DynamoDB when pipeline starts
 	writeInitialMetadataTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("WriteInitialMetadata"), &awsstepfunctionstasks.CallAwsServiceProps{
 		Service: jsii.String("dynamodb"),
@@ -205,6 +227,17 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	})
 
 	// Grant read permissions to placeholder Lambda
+	// Task 6: Invoke Lambda function for audio processing
+	audioProcessorTask := awsstepfunctionstasks.NewLambdaInvoke(stack, jsii.String("InvokeSleepAudioProcessor"), &awsstepfunctionstasks.LambdaInvokeProps{
+		LambdaFunction: audioProcessorFunction,
+		ResultPath:     jsii.String("$.processorResult"),
+		Payload: awsstepfunctions.TaskInput_FromObject(&map[string]interface{}{
+			"detail.$": "$.detail",
+			"bucket.$": "$.detail.bucket.name",
+			"audioId.$": "$.detail.object.key",
+		}),
+	})
+
 	// This is a placeholder implementation - real audio generation logic comes later
 	pollyTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("PollyTask"), &awsstepfunctionstasks.CallAwsServiceProps{
 		Service:      jsii.String("polly"),
@@ -225,10 +258,11 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	})
 
 	// Define the state machine workflow with error handling:
-	// Write metadata -> Process with Polly (with error handling) -> Update metadata to COMPLETED -> Publish success
-	definition := writeInitialMetadataTask.
+	// Define the state machine workflow with Lambda integration:
+	// Write metadata -> Lambda Processor -> Polly (with error handling) -> Update metadata to COMPLETED -> Publish success
 		Next(pollyTask).
-		Next(updateMetadataSuccessTask).
+		Next(audioProcessorTask).
+		Next(pollyTask).
 		Next(publishSuccessTask)
 
 	// Create the Step Functions state machine for audio processing pipeline

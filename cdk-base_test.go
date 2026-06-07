@@ -553,3 +553,146 @@ func TestDynamoDBUpdateTasksForFailure(t *testing.T) {
 		},
 	})
 }
+
+// ========== Issue #7: Lambda Function Integration for Audio Processing ==========
+
+// TestLambdaFunctionExists verifies the Lambda function resource is created
+func TestLambdaFunctionExists(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify Lambda function exists
+	template.ResourceCountIs(jsii.String("AWS::Lambda::Function"), jsii.Number(1))
+}
+
+// TestLambdaFunctionConfiguration verifies Lambda function has correct runtime and environment
+func TestLambdaFunctionConfiguration(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify Lambda function has correct runtime and environment variables
+	template.HasResourceProperties(jsii.String("AWS::Lambda::Function"), map[string]interface{}{
+		"Runtime": assertions.Match_StringLikeRegexp(jsii.String("python.*")),
+		"Handler": "handler.lambda_handler",
+		"Environment": map[string]interface{}{
+			"Variables": map[string]interface{}{
+				"METADATA_TABLE_NAME": map[string]interface{}{
+					"Ref": assertions.Match_StringLikeRegexp(jsii.String(".*MetadataTable.*")),
+				},
+			},
+		},
+	})
+}
+
+// TestLambdaFunctionHasExecutionRole verifies Lambda has proper IAM execution role
+func TestLambdaFunctionHasExecutionRole(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify Lambda function has an execution role
+	template.HasResourceProperties(jsii.String("AWS::Lambda::Function"), map[string]interface{}{
+		"Role": map[string]interface{}{
+			"Fn::GetAtt": assertions.Match_ArrayWith([]interface{}{
+				assertions.Match_StringLikeRegexp(jsii.String(".*Role.*")),
+			}),
+		},
+	})
+}
+
+// TestLambdaExecutionRoleHasDynamoDBPermissions verifies Lambda role can read/write DynamoDB
+func TestLambdaExecutionRoleHasDynamoDBPermissions(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify Lambda execution role has DynamoDB read/write permissions
+	template.HasResourceProperties(jsii.String("AWS::IAM::Policy"), map[string]interface{}{
+		"PolicyDocument": map[string]interface{}{
+			"Statement": assertions.Match_ArrayWith([]interface{}{
+				map[string]interface{}{
+					"Action": assertions.Match_ArrayWith([]interface{}{
+						"dynamodb:GetItem",
+					}),
+					"Effect": "Allow",
+				},
+			}),
+		},
+	})
+}
+
+// TestStateMachineHasLambdaInvokeTask verifies state machine includes Lambda invocation task
+func TestStateMachineHasLambdaInvokeTask(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine definition contains Lambda invocation
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*SleepAudioProcessor.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestStateMachineRoleCanInvokeLambda verifies state machine role has lambda:InvokeFunction permission
+func TestStateMachineRoleCanInvokeLambda(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine execution role has Lambda invoke permissions
+	template.HasResourceProperties(jsii.String("AWS::IAM::Policy"), map[string]interface{}{
+		"PolicyDocument": map[string]interface{}{
+			"Statement": assertions.Match_ArrayWith([]interface{}{
+				map[string]interface{}{
+					"Action": "lambda:InvokeFunction",
+					"Effect": "Allow",
+				},
+			}),
+		},
+	})
+}
