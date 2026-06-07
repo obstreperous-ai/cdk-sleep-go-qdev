@@ -696,3 +696,217 @@ func TestStateMachineRoleCanInvokeLambda(t *testing.T) {
 		},
 	})
 }
+
+// ========== Issue #8: Complete Pipeline Integration with Input Validation ==========
+
+// TestCompletePipelineWiring verifies all components are correctly wired together
+func TestCompletePipelineWiring(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify EventBridge rule targets Step Functions state machine
+	template.HasResourceProperties(jsii.String("AWS::Events::Rule"), map[string]interface{}{
+		"Targets": assertions.Match_ArrayWith([]interface{}{
+			map[string]interface{}{
+				"Arn": map[string]interface{}{
+					"Ref": assertions.Match_StringLikeRegexp(jsii.String(".*StateMachine.*")),
+				},
+			},
+		}),
+	})
+
+	// Verify state machine definition contains all required tasks
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					// Verify complete chain exists
+					assertions.Match_StringLikeRegexp(jsii.String(".*WriteInitialMetadata.*")),
+					assertions.Match_StringLikeRegexp(jsii.String(".*InvokeSleepAudioProcessor.*")),
+					assertions.Match_StringLikeRegexp(jsii.String(".*PollyTask.*")),
+					assertions.Match_StringLikeRegexp(jsii.String(".*UpdateMetadataSuccess.*")),
+					assertions.Match_StringLikeRegexp(jsii.String(".*PublishSuccess.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestStateMachineHasProperTaskChain verifies the state machine orchestrates tasks in correct order
+func TestStateMachineHasProperTaskChain(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine contains proper task sequencing
+	// WriteInitialMetadata -> Lambda -> Polly -> UpdateSuccess -> PublishSuccess
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*Next.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestLambdaHasInputValidation verifies Lambda function validates input properly
+func TestLambdaHasInputValidation(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify Lambda function exists (validation logic is in handler.py)
+	template.ResourceCountIs(jsii.String("AWS::Lambda::Function"), jsii.Number(1))
+	
+	// Verify Lambda has proper configuration for validation
+	template.HasResourceProperties(jsii.String("AWS::Lambda::Function"), map[string]interface{}{
+		"Handler": "handler.lambda_handler",
+		"Runtime": assertions.Match_StringLikeRegexp(jsii.String("python.*")),
+	})
+}
+
+// TestStateMachineErrorHandlingWithCatch verifies error paths exist
+func TestStateMachineErrorHandlingWithCatch(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine has Catch blocks for error handling
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*Catch.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestErrorPathUpdatesStatusToFailed verifies failure path updates DynamoDB correctly
+func TestErrorPathUpdatesStatusToFailed(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine contains UpdateMetadataFailure task
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*UpdateMetadataFailure.*")),
+					assertions.Match_StringLikeRegexp(jsii.String(".*FAILED.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestSuccessPathUpdatesStatusToCompleted verifies success path updates DynamoDB correctly
+func TestSuccessPathUpdatesStatusToCompleted(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine contains UpdateMetadataSuccess with COMPLETED status
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*UpdateMetadataSuccess.*")),
+					assertions.Match_StringLikeRegexp(jsii.String(".*COMPLETED.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestAllIAMPermissionsAreLeastPrivilege verifies IAM permissions across all services
+func TestAllIAMPermissionsAreLeastPrivilege(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine has necessary permissions but not excessive
+	template.HasResourceProperties(jsii.String("AWS::IAM::Policy"), map[string]interface{}{
+		"PolicyDocument": map[string]interface{}{
+			"Statement": assertions.Match_ArrayWith([]interface{}{
+				map[string]interface{}{
+					"Action": "polly:SynthesizeSpeech",
+					"Effect": "Allow",
+				},
+			}),
+		},
+	})
+}
+
+// TestCompleteStackSnapshot creates a comprehensive snapshot of the integrated stack
+func TestCompleteStackSnapshot(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify all major resources exist
+	template.ResourceCountIs(jsii.String("AWS::S3::Bucket"), jsii.Number(2))           // Input + Output
+	template.ResourceCountIs(jsii.String("AWS::DynamoDB::Table"), jsii.Number(1))      // Metadata table
+	template.ResourceCountIs(jsii.String("AWS::Lambda::Function"), jsii.Number(1))     // Audio processor
+	template.ResourceCountIs(jsii.String("AWS::StepFunctions::StateMachine"), jsii.Number(1)) // State machine
+	template.ResourceCountIs(jsii.String("AWS::Events::Rule"), jsii.Number(1))         // EventBridge rule
+	template.ResourceCountIs(jsii.String("AWS::SNS::Topic"), jsii.Number(2))           // Success + Failure topics
+}

@@ -254,18 +254,30 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 
 	// Add error handling to Polly task - if it fails, update DDB and publish to failure topic
 	pollyTask.AddCatch(updateMetadataFailureTask.Next(publishFailureTask), &awsstepfunctions.CatchProps{
-		ResultPath: jsii.String("$.error"),
+		ResultPath: jsii.String("$.Error"),
+	})
+
+	// Add error handling to Lambda task - if it fails or validation fails, update DDB and publish to failure topic
+	audioProcessorTask.AddCatch(updateMetadataFailureTask.Next(publishFailureTask), &awsstepfunctions.CatchProps{
+		ResultPath: jsii.String("$.Error"),
 	})
 
 	// Define the state machine workflow with error handling:
-	// Define the state machine workflow with Lambda integration:
-	// Write metadata -> Lambda Processor -> Polly (with error handling) -> Update metadata to COMPLETED -> Publish success
-		Next(pollyTask).
+	// Complete end-to-end flow:
+	// 1. Write initial metadata (status=PROCESSING)
+	// 2. Invoke Lambda for audio processing and validation (with error handling)
+	// 3. Call Polly for text-to-speech synthesis (with error handling)
+	// 4. Update metadata to COMPLETED
+	// 5. Publish success notification
+	// Error paths: Lambda/Polly failures -> Update status to FAILED -> Publish failure notification
+	definition := writeInitialMetadataTask.
 		Next(audioProcessorTask).
 		Next(pollyTask).
+		Next(updateMetadataSuccessTask).
 		Next(publishSuccessTask)
 
 	// Create the Step Functions state machine for audio processing pipeline
+	// This state machine orchestrates the complete end-to-end pipeline
 	stateMachine := awsstepfunctions.NewStateMachine(stack, jsii.String("SleepAudioPipelineStateMachine"), &awsstepfunctions.StateMachineProps{
 		StateMachineName: jsii.String("SleepAudioPipelineStateMachine"),
 		DefinitionBody:   awsstepfunctions.DefinitionBody_FromChainable(definition),

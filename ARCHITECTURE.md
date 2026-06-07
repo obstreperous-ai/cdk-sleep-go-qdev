@@ -23,40 +23,53 @@ The sleep audio pipeline is a production-grade, fully serverless system that ena
 ## Architecture Diagram
 
 ```mermaid
-flowchart TD
+flowchart LR
     subgraph Users["User Layer"]
         U[User/Application]
     end
     
     subgraph Ingestion["Ingestion Layer"]
-        IB[S3 Input Bucket<br/>Versioned + Encrypted]
+        IB["S3 Input Bucket<br/>Versioned + Encrypted<br/>EventBridge Enabled"]
     end
     
     subgraph EventRouting["Event Routing Layer"]
-        EB[Amazon EventBridge<br/>Event Bus + Rules]
+        EB["Amazon EventBridge<br/>S3 Object Created Events<br/>Event Pattern Filtering"]
     end
     
-    subgraph Orchestration["Orchestration Layer"]
-        SF[AWS Step Functions<br/>SleepAudioPipelineStateMachine<br/>Standard Workflow]
+    subgraph Orchestration["Orchestration Layer - Step Functions State Machine"]
+        direction TB
+        START[Start] --> DDB_INIT["1. Write Initial Metadata<br/>DynamoDB PutItem<br/>status=PROCESSING"]
+        DDB_INIT --> LAMBDA["2. Invoke Lambda<br/>SleepAudioProcessor<br/>Input Validation"]
+        LAMBDA --> POLLY["3. Polly Task<br/>synthesizeSpeech<br/>Text-to-Speech"]
+        POLLY --> DDB_SUCCESS["4. Update Metadata<br/>DynamoDB UpdateItem<br/>status=COMPLETED"]
+        DDB_SUCCESS --> SNS_SUCCESS["5. Publish Success<br/>SNS Notification"]
+        SNS_SUCCESS --> END[End]
         
-        subgraph ProcessingSteps["Processing Steps"]
-            POLLY[Polly Task<br/>synthesizeSpeech<br/>Placeholder Implementation]
-        end
+        LAMBDA -.->|Error/Validation Fails| CATCH1["Catch Block"]
+        POLLY -.->|Error| CATCH2["Catch Block"]
+        CATCH1 --> DDB_FAIL["Update Metadata<br/>DynamoDB UpdateItem<br/>status=FAILED"]
+        CATCH2 --> DDB_FAIL
+        DDB_FAIL --> SNS_FAIL["Publish Failure<br/>SNS Notification"]
+        SNS_FAIL --> END_FAIL[End - Failed]
     end
     
     subgraph Storage["Storage Layer"]
-        OB[S3 Output Bucket<br/>Versioned + Encrypted<br/>Lifecycle Policies]
-        DB[(DynamoDB Table<br/>Metadata Store<br/>Future: user_id, status, duration)]
+        OB["S3 Output Bucket<br/>Versioned + Encrypted<br/>Lifecycle Policies<br/>(Future Output Storage)"]
+        DB[("DynamoDB Metadata Table<br/>audioId (PK)<br/>status: PROCESSING/COMPLETED/FAILED<br/>inputBucket, inputKey, createdAt<br/>updatedAt, errorMessage")]
     end
     
     subgraph Notification["Notification Layer"]
-        SNS_SUCCESS[SNS Topic<br/>Future: Processing Success]
-        SNS_ERROR[SNS Topic<br/>Future: Processing Errors]
+        SNS_COMPLETE["SNS Topic<br/>SleepAudioPipelineCompleted<br/>KMS Encrypted"]
+        SNS_ERROR["SNS Topic<br/>SleepAudioPipelineFailed<br/>KMS Encrypted"]
+    end
+    
+    subgraph Processing["Lambda Processing"]
+        PROC["Audio Processor Lambda<br/>Python 3.12<br/>Input Validation:<br/>- Required fields check<br/>- File format validation<br/>- Extension check"]
     end
     
     subgraph Observability["Observability Layer"]
-        CW[CloudWatch Logs<br/>State Machine Execution Logs]
-        XR[X-Ray Tracing<br/>Enabled for State Machine]
+        CW["CloudWatch Logs<br/>/aws/vendedlogs/states/<br/>State Machine Logs<br/>Lambda Logs"]
+        XR["X-Ray Tracing<br/>Distributed Tracing<br/>Enabled on State Machine"]
     end
     
     subgraph Security["Security & Compliance"]
@@ -66,53 +79,227 @@ flowchart TD
     
     %% Main Flow
     U -->|Upload Raw Audio| IB
-    IB -->|S3 Event Notification| EB
-    EB -->|Trigger Processing| SF
+    IB -->|"S3 Event:<br/>Object Created"| EB
+    EB -->|"Start Execution<br/>(event as input)"| DDB_INIT
     
-    SF --> POLLY
-    POLLY -->|Future: Store| OB
-    POLLY -->|Future: Metadata| DB
+    DDB_INIT -.->|Write| DB
+    LAMBDA -->|Reads metadata| DB
+    LAMBDA -.->|Validate| IB
+    DDB_SUCCESS -.->|Update| DB
+    DDB_FAIL -.->|Update| DB
     
-    %% Future Processing Steps (Commented for Phase 2+)
-    %% V[Validation Lambda] --> M[Metadata Extraction]
-    %% M --> P[Polly Lambda]
-    %% P --> BR[Bedrock Lambda]
-    %% BR --> T[Transcoding Lambda]
+    SNS_SUCCESS -.->|Publish to| SNS_COMPLETE
+    SNS_FAIL -.->|Publish to| SNS_ERROR
     
-    T -->|Store Processed Audio| OB
-    T -->|Store Metadata| DB
+    LAMBDA -.->|Invokes| PROC
     
-    SF -->|Future: Success| SNS_SUCCESS
-    SF -->|Future: Failure| SNS_ERROR
+    SNS_COMPLETE -.->|"Email/SMS<br/>Webhook"| U
+    SNS_ERROR -.->|"Alert Ops Team"| U
     
-    SNS_SUCCESS -->|Notify| U
-    SNS_ERROR -->|Alert Ops Team| U
+    POLLY -.->|"Future:<br/>Store Output"| OB
     
     %% Cross-cutting concerns
-    POLLY -.->|Logs| CW
-    T -.->|Logs| CW
+    DDB_INIT -.->|Logs| CW
+    LAMBDA -.->|Logs| CW
+    START -.->|Trace| XR
     
-    SF -.->|Trace| XR
-    
-    IAM -.->|Authorize| POLLY
-    IAM -.->|Authorize| SF
-    KMS -.->|Encrypt/Decrypt| IB
-    
-    %% Future integrations
-    %% KMS -.->|Encrypt/Decrypt| DB
-    CT -.->|Audit| DB
+    IAM -.->|"Authorize<br/>Least Privilege"| LAMBDA
+    IAM -.->|Authorize| START
+    KMS -.->|"Encrypt S3<br/>Encrypt SNS"| IB
+    KMS -.->|Encrypt| DB
     
     style U fill:#e1f5ff
     style IB fill:#ffecb3
     style OB fill:#ffecb3
     style EB fill:#c8e6c9
+    style DDB_INIT fill:#d1c4e9
+    style LAMBDA fill:#f8bbd0
     style POLLY fill:#f8bbd0
-    style T fill:#f8bbd0
+    style DDB_SUCCESS fill:#d1c4e9
+    style DDB_FAIL fill:#ffcdd2
+    style SNS_SUCCESS fill:#c5e1a5
+    style SNS_FAIL fill:#ef9a9a
     style DB fill:#fff9c4
-    style SNS_SUCCESS fill:#a5d6a7
+    style SNS_COMPLETE fill:#a5d6a7
     style SNS_ERROR fill:#ef9a9a
-    style CWA fill:#e0e0e0
+    style CW fill:#e0e0e0
     style XR fill:#e0e0e0
+    style PROC fill:#f8bbd0
+```
+
+## End-to-End Pipeline Flow
+
+### Success Path
+
+1. **User Upload**: User uploads an audio file (e.g., `sleep-story.mp3`, `meditation.txt`) to the S3 Input Bucket
+
+2. **S3 Event Trigger**: S3 bucket (with EventBridge enabled) emits an `Object Created` event containing:
+   - Bucket name
+   - Object key (file path)
+   - Event time
+   - Additional metadata
+
+3. **EventBridge Routing**: EventBridge rule filters events matching pattern:
+   - Source: `aws.s3`
+   - Detail Type: `Object Created`
+   - Bucket name matches input bucket
+   - Rule triggers Step Functions state machine execution
+
+4. **State Machine Execution Begins**: Step Functions receives the S3 event as input
+
+5. **Step 1 - Write Initial Metadata** (DynamoDB):
+   - Uses `CallAwsService` task to invoke `dynamodb:PutItem`
+   - Creates metadata record with:
+     - `audioId`: Object key from S3 event
+     - `status`: `"PROCESSING"`
+     - `inputBucket`: Bucket name
+     - `inputKey`: Object key
+     - `createdAt`: State machine entry timestamp
+
+6. **Step 2 - Lambda Validation** (Audio Processor):
+   - State machine invokes Lambda function with event details
+   - Lambda performs **input validation**:
+     - **Required Fields Check**: Validates bucket and audioId are present
+     - **Bucket Name Validation**: Checks bucket name length (3-63 chars)
+     - **File Extension Validation**: Ensures file ends with supported format (`.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.txt`)
+     - **Returns**: Validation result with file format metadata
+   - If validation fails: Lambda raises exception → Step Functions catches error → Routes to failure path
+
+7. **Step 3 - Polly Text-to-Speech** (AWS Polly):
+   - Uses `CallAwsService` task to invoke `polly:SynthesizeSpeech`
+   - Currently a placeholder implementation with static parameters
+   - Parameters:
+     - Text: Placeholder string
+     - VoiceId: "Joanna" (neural voice)
+     - OutputFormat: "mp3"
+     - Engine: "neural"
+   - Result stored in `$.pollyResult`
+   - If Polly fails: Step Functions catches error → Routes to failure path
+
+8. **Step 4 - Update Metadata to COMPLETED** (DynamoDB):
+   - Uses `CallAwsService` task to invoke `dynamodb:UpdateItem`
+   - Updates metadata record:
+     - `status`: `"COMPLETED"`
+     - `updatedAt`: State machine entry timestamp
+
+9. **Step 5 - Publish Success Notification** (SNS):
+   - Uses `CallAwsService` task to invoke `sns:Publish`
+   - Publishes to `SleepAudioPipelineCompleted` topic (KMS encrypted)
+   - Message: "Pipeline completed successfully for audioId: {audioId}"
+   - Subject: "Sleep Audio Pipeline Completed"
+
+10. **State Machine Completes**: Execution ends with `SUCCEEDED` status
+
+### Failure/Error Path
+
+Error handling is implemented at two key points: Lambda validation and Polly task.
+
+**Trigger Points**:
+- **Lambda Validation Failure**: Invalid input (missing fields, unsupported format, invalid bucket)
+- **Lambda Processing Error**: Unexpected exceptions during processing
+- **Polly Task Failure**: Polly API errors, throttling, invalid parameters
+
+**Error Handling Flow**:
+
+1. **Catch Block Triggered**: Step Functions catches exception from Lambda or Polly task
+   - Error details captured in `$.Error` result path
+
+2. **Update Metadata to FAILED** (DynamoDB):
+   - Uses `CallAwsService` task to invoke `dynamodb:UpdateItem`
+   - Updates metadata record:
+     - `status`: `"FAILED"`
+     - `updatedAt`: State machine entry timestamp
+     - `errorMessage`: Error details from `$.Error`
+
+3. **Publish Failure Notification** (SNS):
+   - Uses `CallAwsService` task to invoke `sns:Publish`
+   - Publishes to `SleepAudioPipelineFailed` topic (KMS encrypted)
+   - Message: "Pipeline failed for audioId: {audioId} with error: {error}"
+   - Subject: "Sleep Audio Pipeline Failed"
+
+4. **State Machine Completes**: Execution ends (error handled gracefully)
+
+### Validation Points
+
+The pipeline implements **defense-in-depth validation** at multiple layers:
+
+#### 1. EventBridge Layer Validation
+- **Event Pattern Filtering**: Only processes events matching specific source and detail-type
+- **Bucket Name Filtering**: Only triggers for configured input bucket
+- Prevents unnecessary state machine executions
+
+#### 2. Lambda Function Input Validation
+
+**Required Fields Validation**:
+```python
+if not bucket or not audio_id:
+    raise ValidationError("Missing required fields: bucket and audioId are required")
+```
+
+**Bucket Name Validation**:
+```python
+if len(bucket) < 3 or len(bucket) > 63:
+    raise ValidationError(f"Invalid bucket name: {bucket}")
+```
+
+**File Format Validation**:
+```python
+SUPPORTED_AUDIO_FORMATS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.txt']
+if not any(audio_id.lower().endswith(ext) for ext in SUPPORTED_AUDIO_FORMATS):
+    raise ValidationError(f"Unsupported file format")
+```
+
+**Error Response**: Validation errors raise exceptions that are caught by Step Functions error handling, routing to the failure path
+
+#### 3. State Machine Error Handling
+- **Catch Blocks**: Both Lambda and Polly tasks have catch blocks
+- **Error Routing**: Errors automatically route to failure path (DynamoDB update + SNS notification)
+- **Error Preservation**: Error details stored in DynamoDB for debugging
+
+#### 4. IAM Permission Boundaries (Least Privilege)
+- Each service has minimal required permissions
+- Explicit deny on unauthorized actions
+- Resource-level restrictions where applicable
+
+### Data Flow and Transformations
+
+**Initial Input** (from S3 event):
+```json
+{
+  "detail": {
+    "bucket": {"name": "sleep-audio-input-bucket"},
+    "object": {"key": "user-uploads/meditation.mp3"}
+  }
+}
+```
+
+**After Lambda Processing** (`$.processorResult.Payload`):
+```json
+{
+  "statusCode": 200,
+  "valid": true,
+  "audioId": "user-uploads/meditation.mp3",
+  "bucket": "sleep-audio-input-bucket",
+  "format": ".mp3",
+  "status": "processed",
+  "message": "Audio validation and processing completed successfully"
+}
+```
+
+**After Polly Task** (`$.pollyResult`):
+```json
+{
+  "AudioStream": "<binary data>",
+  "ContentType": "audio/mpeg",
+  "RequestCharacters": 123
+}
+```
+
+**Error Flow** (on validation failure):
+```json
+{
+  "Error": "ValidationError: Unsupported file format. audioId must end with one of: .mp3, .wav, .m4a, .flac, .ogg, .txt"
+}
 ```
 
 ## Detailed Component Description
@@ -164,11 +351,31 @@ flowchart TD
 
 ### 3. Processing Layer
 
+#### Lambda Function - Audio Processor
+
+**Purpose**: Validates input, enriches metadata, and prepares audio files for processing.
+
+**Current Implementation (Issue #8)**:
+
+**Input Validation Logic**:
+1. **Required Fields Check**: Ensures bucket and audioId are present
+2. **Bucket Name Validation**: Validates S3 bucket name format (3-63 characters)
+3. **File Extension Validation**: Checks file ends with supported format
+4. **Error Handling**: Raises exceptions for invalid input, caught by Step Functions
+
+**Configuration**:
+- **Runtime**: Python 3.12
+- **Handler**: `handler.lambda_handler`
+- **Memory**: 256 MB
+- **Timeout**: 30 seconds
+- **Environment Variables**: `METADATA_TABLE_NAME` (for future direct DynamoDB access)
+- **IAM Permissions**: Read access to S3 input bucket, read/write to DynamoDB table
+
 #### AWS Step Functions State Machine
 
 **Purpose**: Orchestrates multi-step audio processing workflow with error handling, retries, and parallel execution.
-**Current Implementation (Issue #4 - Minimal Skeleton)**:
 
+**Current Implementation (Issues #4-8 - Complete Basic Pipeline)**:
 
 **Current Implementation (Issues #4-6)**:
    - Direct service integration using Step Functions' `CallAwsService` task
@@ -177,60 +384,46 @@ The state machine currently implements:
 1. **DynamoDB Write Initial Metadata** (AWS Service Integration - Issue #5)
    - Writes initial record with status = "PROCESSING"
    - Stores audioId, inputBucket, inputKey, createdAt timestamp
+   - Uses JSON path expressions to extract data from S3 event
 
-2. **Polly Task** (AWS Service Integration - Issue #4)
+2. **Lambda Invocation** (LambdaInvoke task - Issue #7, #8)
+   - Invokes Audio Processor Lambda for validation and processing
+   - Passes S3 event details as payload
+   - **Error Handling**: Catch block routes validation failures to failure path
+   - Result stored in `$.processorResult`
+
+3. **Polly Task** (AWS Service Integration - Issue #4)
+   - Placeholder implementation for text-to-speech synthesis
      - Text: "This is a placeholder for sleep audio generation"
      - VoiceId: "Joanna" (neural voice)
      - OutputFormat: "mp3"
      - Engine: "neural"
    - IAM permissions: `polly:SynthesizeSpeech` (least privilege)
    - Result stored in `$.pollyResult` for future processing steps
+   - **Error Handling**: Catch block routes Polly failures to failure path
 
-This minimal implementation serves as the foundation for the complete workflow. Future issues will extend the state machine with additional processing steps.
-
-   - **Error Handling**: Includes Catch block that triggers failure path
-
-3. **DynamoDB Update Metadata - Success Path** (Issue #5)
+4. **DynamoDB Update Metadata - Success Path** (Issue #5, #8)
    - Updates status to "COMPLETED" with timestamp
-   - Only executes if Polly task succeeds
-1. **Validation Step** (Lambda) - **Future Implementation**
-4. **SNS Publish Success** (Issue #6)
+   - Only executes if all previous tasks succeed
+
+5. **SNS Publish Success** (Issue #6, #8)
    - Publishes notification to completion topic
    - Includes audioId in message
+   - Uses `States.Format` for dynamic message generation
 
-5. **DynamoDB Update Metadata - Failure Path** (Issue #6)
+**Error Handling Path** (Issue #6, #8):
+
+6. **DynamoDB Update Metadata - Failure Path** (triggered by Catch blocks)
    - Updates status to "FAILED" with timestamp and error details
    - Triggered by Catch block on Polly task errors
+   - Stores error message from `$.Error`
 
-6. **SNS Publish Failure** (Issue #6)
+7. **SNS Publish Failure** (follows failure DynamoDB update)
    - Publishes notification to failure topic
    - Includes audioId and error message
 
-This implementation provides the foundation with error handling and status tracking. Future issues will extend the state machine with additional processing steps.
-1. **Validation Step** (Lambda)
-   - Validates audio file format and codec
-   - Checks file size limits (min/max)
-   - Verifies file integrity (not corrupted)
-   - Extracts basic file information
-   - **Error Handling**: Fails fast if file is invalid, triggers SNS error notification
-2. **Metadata Extraction Step** (Lambda) - **Future Implementation**
-2. **Metadata Extraction Step** (Lambda)
-   - Extracts audio metadata: duration, bitrate, sample rate, codec
-   - Identifies audio characteristics: frequency distribution, amplitude patterns
-   - Calculates audio quality metrics
-   - Stores preliminary metadata in DynamoDB with status `PROCESSING`
-   - **Parallel Execution**: Can run in parallel with validation for text files
-3. **Amazon Polly Integration** (Current - Service Integration)
-3. **Amazon Polly Integration** (Lambda)
-   - **Use Case**: Converts text files into natural-sounding speech for sleep stories, meditations
-   - **Voice Selection**: Neural voices optimized for calm, soothing narration (e.g., Joanna, Matthew)
-   - **SSML Support**: Speech Synthesis Markup Language for fine-tuned control (pauses, emphasis, breathing)
-    - **Current**: Placeholder implementation with basic synthesis call
-   - **Streaming**: Supports long-form content via asynchronous synthesis tasks
-    - **Security**: API access via IAM role with least-privilege permissions, no hardcoded credentials
-   - **Credentials**: API access via IAM role, no hardcoded credentials
-4. **AWS Bedrock Integration** (Lambda) - **Future Implementation**
-4. **AWS Bedrock Integration** (Lambda)
+**Future Processing Steps** (Planned for subsequent issues):
+1. **Enhanced Polly Integration** (Lambda)
    - **Use Case**: AI-enhanced audio generation for ambient sleep sounds, soundscapes
    - **Models**: Leverages foundation models for:
      - Generating natural soundscapes (rain, ocean waves, forest ambience)
@@ -239,9 +432,8 @@ This implementation provides the foundation with error handling and status track
    - **Prompt Engineering**: Structured prompts for consistent, high-quality outputs
    - **Output Processing**: Validates and normalizes AI-generated audio
    - **Fallback Logic**: Falls back to Polly or pre-generated sounds if Bedrock is unavailable
-   - **Rate Limiting**: Implements exponential backoff for API throttling
-   - **Credentials**: API keys stored in AWS Secrets Manager, retrieved at runtime
-5. **Transcoding/Optimization Step** (Lambda) - **Future Implementation**
+
+2. **Transcoding/Optimization Step** (Lambda)
 5. **Transcoding/Optimization Step** (Lambda)
    - Converts audio to optimized formats for streaming (e.g., AAC, Opus)
    - Normalizes audio levels for consistent volume
@@ -249,18 +441,19 @@ This implementation provides the foundation with error handling and status track
    - Creates multiple quality tiers (high/medium/low bitrate)
    - Generates waveform images for UI visualization
 
+**Configuration**:
 - **CloudWatch Logs**: All execution logs sent to dedicated log group (`/aws/vendedlogs/states/SleepAudioPipeline`)
+  - Retention: 7 days
+  - Log Level: ALL (includes input/output of each state)
 - **X-Ray Tracing**: Enabled for distributed tracing and performance analysis
-- **IAM Least Privilege**: State machine execution role has minimal permissions (currently only `polly:SynthesizeSpeech`)
+- **IAM Least Privilege**: State machine execution role has minimal permissions:
+  - `dynamodb:PutItem`, `dynamodb:UpdateItem` on metadata table
+  - `polly:SynthesizeSpeech` (all resources)
+  - `sns:Publish` on success/failure topics
+  - `lambda:InvokeFunction` on audio processor function
 - **Standard Workflow**: Using Standard (not Express) for audit trail and visual monitoring
-- **Timeout**: 5-minute timeout to prevent hung executions
-- **Future**: Error handling with catch states, retry logic, parallel states, choice states will be added in subsequent issues
-- **Wait States**: Implements backoff for rate-limited external APIs (Bedrock, Polly)
-
-**Current Features (Issue #6)**:
-- **Error Handling**: Catch blocks on Polly task route to failure path
-- **Status Tracking**: DynamoDB updates for PROCESSING, COMPLETED, FAILED states
-- **Notifications**: SNS topics for success and failure notifications (encrypted with KMS)
+- **Timeout**: 5 minutes (prevents hung executions)
+- **Tracing**: Enabled for full distributed tracing
 
 **Why Step Functions?**
 - Visual workflow design and monitoring
@@ -270,13 +463,13 @@ This implementation provides the foundation with error handling and status track
 - Declarative workflow definition with no orchestration boilerplate
 
 **Current Limitations (To Be Addressed in Future Issues)**:
-- No DynamoDB metadata storage yet
-- No error handling or retry logic
-- No output file storage
-- Placeholder Polly parameters (not reading from event input)
-- No SNS notifications
-- No code for orchestration logic
-
+**Completed Features (Issue #8)**:
+- ✅ Complete end-to-end pipeline wiring
+- ✅ Input validation in Lambda
+- ✅ Error handling with Catch blocks
+- ✅ DynamoDB status tracking (PROCESSING → COMPLETED/FAILED)
+- ✅ SNS notifications (success and failure paths)
+- ✅ Least-privilege IAM across all components
 ### Alternative: Lambda-Only Processing
 
 For simple, single-step processing, direct Lambda invocation from EventBridge is an option:
@@ -353,12 +546,30 @@ For simple, single-step processing, direct Lambda invocation from EventBridge is
    - **Subscribers**: User notification service, analytics service, monitoring dashboard
    - **Message Format**: JSON with audio_id, user_id, processed_file_url, duration, format
 1. **Processing Success Topic** (`SleepAudioPipelineCompleted` - Issue #6)
+   - **Topic Name**: `SleepAudioPipelineCompleted`
+   - **Encryption**: KMS customer-managed key with rotation enabled
+   - **Message Format**: Plain text with audioId (formatted by Step Functions)
+   - **Triggered By**: Step Functions state machine on successful completion
+   - **Current Subscribers**: None (configured externally)
+   - **Future Subscribers**: 
+     - User notification Lambda (email/SMS)
+     - Analytics/monitoring dashboard
+     - Webhook to external systems
 
 2. **Processing Error Topic**
    - **Subscribers**: Operations team email/SMS, PagerDuty, CloudWatch alarm actions
    - **Encryption**: KMS encryption with dedicated key
    - **Message Format**: JSON with audio_id, user_id, error_type, error_message, stack_trace
 2. **Processing Error Topic** (`SleepAudioPipelineFailed` - Issue #6)
+   - **Topic Name**: `SleepAudioPipelineFailed`
+   - **Encryption**: KMS customer-managed key with rotation enabled
+   - **Message Format**: Plain text with audioId and error details
+   - **Triggered By**: Step Functions state machine on failure (Lambda validation or Polly errors)
+   - **Current Subscribers**: None (configured externally)
+   - **Future Subscribers**:
+     - Operations team email/SMS
+     - PagerDuty integration
+     - CloudWatch alarm actions
 
 **Configuration**:
 - **Encryption**: In-transit and at-rest encryption
@@ -597,27 +808,28 @@ This architecture will be implemented incrementally following strict TDD princip
 - ✅ Issue #4: Step Functions state machine skeleton + minimal Polly integration
 
 **Phase 2: State Machine Expansion** (Issues #5-10)
-- Issue #5: DynamoDB metadata table + input/output handling in state machine
-- Issue #6: Validation step (format, size, integrity checks)
-- ✅ Issue #5: DynamoDB metadata table + input/output handling in state machine
+**Phase 2: State Machine Expansion** (Issues #5-10) ✅
 - Issue #8: Enhanced Polly integration (read from event, store to S3)
-- Issue #9: Error handling and retry logic
-- Issue #10: SNS notifications for success/failure
-- SNS topics for notifications
-**Phase 3: Advanced Processing** (Issues #11-15)
+- ✅ Issue #6: SNS topics for notifications + error handling
+- ✅ Issue #7: Lambda function integration for audio processing
+- ✅ Issue #8: Complete pipeline integration with input validation (CURRENT)
+
 - AWS Bedrock integration for AI-generated audio
+- Issue #9: Pipeline testing, refinement, and deployment preparation
+- Issue #10: Enhanced Polly integration (read from event, store to S3)
+- Issue #11: Retry logic and advanced error handling
 - Transcoding and optimization pipeline
 - Parallel processing with Map states
 - Choice states for conditional logic
 - Integration tests for end-to-end flow
-
+- Load testing and performance optimization
 **Phase 4: Observability** (Issues #16-20) (Previous "Phase 2")
 - CloudWatch custom metrics and dashboards
 - CloudWatch Alarms for critical paths
 - Advanced X-Ray tracing configuration
 - Cost monitoring and optimization
 - Integration tests for end-to-end flow
-**Phase 5: Multi-Environment & Production Readiness** (Issues #21-25)
+
 **Phase 5: Multi-Environment** (Issues #21-25)
 - CDK context-based configuration
 - Environment-specific resource naming
@@ -626,7 +838,15 @@ This architecture will be implemented incrementally following strict TDD princip
 - Blue/green deployment strategy
 
 ---
-**Document Version**: 1.1.0  
-**Last Updated**: 2024-01-XX (Issue #4: Step Functions + Polly Integration)  
-**Last Updated**: 2024 (Initial Architecture Design)  
+**Document Version**: 2.0.0  
+**Last Updated**: 2024 (Issue #8: Complete Pipeline Integration with Input Validation)  
 **Status**: Living Document - Updated with each implementation phase
+
+**Changes in v2.0.0**:
+- Complete end-to-end pipeline flow documented
+- Comprehensive Mermaid diagram with all components and data flows
+- Input validation points documented
+- Success and failure paths fully documented
+- Lambda function validation logic detailed
+- State machine task chain completed
+- Error handling and catch blocks documented
