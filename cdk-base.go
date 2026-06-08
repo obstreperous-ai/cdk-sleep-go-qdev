@@ -2,7 +2,6 @@ package main
 
 import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
-	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
@@ -78,8 +77,8 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 		Handler:      jsii.String("handler.lambda_handler"),
 		Code:         awslambda.Code_FromAsset(jsii.String("lambda/audio-processor"), nil),
 		Environment: &map[string]*string{
-			"METADATA_TABLE_NAME": metadataTable.TableName(),
 		},
+		PartitionKey: &awsdynamodb.Attribute{
 		Timeout:     awscdk.Duration_Seconds(jsii.Number(30)),
 		MemorySize:  jsii.Number(256),
 		Description: jsii.String("Processes audio files, enriches metadata, and performs validation"),
