@@ -45,6 +45,11 @@ flowchart LR
         DDB_SUCCESS --> SNS_SUCCESS["5. Publish Success<br/>SNS Notification"]
         SNS_SUCCESS --> END[End]
         
+        %% Retry policies on tasks
+        LAMBDA -.->|"Retry: 3 attempts<br/>Exponential backoff"| LAMBDA
+        POLLY -.->|"Retry: 3 attempts<br/>Exponential backoff"| POLLY
+        DDB_INIT -.->|"Retry: 3 attempts<br/>DynamoDB throttling"| DDB_INIT
+        
         LAMBDA -.->|Error/Validation Fails| CATCH1["Catch Block"]
         POLLY -.->|Error| CATCH2["Catch Block"]
         CATCH1 --> DDB_FAIL["Update Metadata<br/>DynamoDB UpdateItem<br/>status=FAILED"]
@@ -70,6 +75,11 @@ flowchart LR
     subgraph Observability["Observability Layer"]
         CW["CloudWatch Logs<br/>/aws/vendedlogs/states/<br/>State Machine Logs<br/>Lambda Logs"]
         XR["X-Ray Tracing<br/>Distributed Tracing<br/>Enabled on State Machine"]
+    end
+    
+    subgraph Alarms["CloudWatch Alarms"]
+        ALARM_SM["State Machine Failures<br/>ExecutionsFailed metric"]
+        ALARM_LAMBDA["Lambda Error Rate<br/>Errors metric"]
     end
     
     subgraph Security["Security & Compliance"]
@@ -102,6 +112,8 @@ flowchart LR
     DDB_INIT -.->|Logs| CW
     LAMBDA -.->|Logs| CW
     START -.->|Trace| XR
+    START -.->|Monitor| ALARM_SM
+    LAMBDA -.->|Monitor| ALARM_LAMBDA
     
     IAM -.->|"Authorize<br/>Least Privilege"| LAMBDA
     IAM -.->|Authorize| START
@@ -163,9 +175,40 @@ flowchart LR
      - **Bucket Name Validation**: Checks bucket name length (3-63 chars)
      - **File Extension Validation**: Ensures file ends with supported format (`.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.txt`)
      - **Returns**: Validation result with file format metadata
+  - **Retry Policy (Issue #10)**:
+    - Error types: `Lambda.ServiceException`, `Lambda.TooManyRequestsException`, `States.TaskFailed`
+    - Max attempts: 3
+    - Initial interval: 2 seconds
+    - Backoff rate: 2.0 (exponential backoff: 2s, 4s, 8s)
+  - **Error Handling (Issue #10)**:
+    - Catches all error types (`States.ALL`)
+    - Error details stored in `$.Error` for DynamoDB update
+    - Routes to failure path: Update DynamoDB status → Publish SNS notification
    - If validation fails: Lambda raises exception → Step Functions catches error → Routes to failure path
 
 7. **Step 3 - Polly Text-to-Speech** (AWS Polly):
+  - **Retry Policy (Issue #10)**:
+    - Error types: `Polly.EngineNotSupportedException`, `Polly.ServiceFailureException`, `States.TaskFailed`
+    - Max attempts: 3
+    - Initial interval: 2 seconds
+    - Backoff rate: 2.0 (exponential backoff)
+  - **Error Handling (Issue #10)**:
+    - Catches all error types with specific error identification
+    - Routes to failure path on any error
+
+8. **DynamoDB Operations - Retry Policies** (Issue #10):
+  All DynamoDB tasks (PutItem, UpdateItem) have retry configured:
+  - **Error types**: 
+    - `States.TaskFailed` - General task failures
+    - `DynamoDB.ProvisionedThroughputExceededException` - Throttling
+    - `DynamoDB.RequestLimitExceeded` - Rate limiting
+  - **Max attempts**: 3
+  - **Initial interval**: 2 seconds
+  - **Backoff rate**: 2.0 (exponential: 2s, 4s, 8s)
+  - **Why**: Handles transient failures, throttling during high load, eventual consistency issues
+
+7. **Step 3 - Polly Text-to-Speech** (AWS Polly):
+  - Uses `CallAwsService` task to invoke `polly:SynthesizeSpeech`
    - Uses `CallAwsService` task to invoke `polly:SynthesizeSpeech`
    - Currently a placeholder implementation with static parameters
    - Parameters:
@@ -177,6 +220,8 @@ flowchart LR
    - If Polly fails: Step Functions catches error → Routes to failure path
 
 8. **Step 4 - Update Metadata to COMPLETED** (DynamoDB):
+  - Error Handling (Issue #10): Enhanced catch blocks with specific error types
+    - Identifies Lambda.ServiceException, States.TaskFailed, DynamoDB errors, Polly errors
    - Uses `CallAwsService` task to invoke `dynamodb:UpdateItem`
    - Updates metadata record:
      - `status`: `"COMPLETED"`
@@ -250,6 +295,8 @@ if not any(audio_id.lower().endswith(ext) for ext in SUPPORTED_AUDIO_FORMATS):
 ```
 
 **Error Response**: Validation errors raise exceptions that are caught by Step Functions error handling, routing to the failure path
+**Structured Logging (Issue #10)**: Lambda outputs JSON-formatted logs with request IDs, status, error context
+
 
 #### 3. State Machine Error Handling
 - **Catch Blocks**: Both Lambda and Polly tasks have catch blocks
@@ -368,8 +415,12 @@ if not any(audio_id.lower().endswith(ext) for ext in SUPPORTED_AUDIO_FORMATS):
 - **Handler**: `handler.lambda_handler`
 - **Memory**: 256 MB
 - **Timeout**: 30 seconds
-- **Environment Variables**: `METADATA_TABLE_NAME` (for future direct DynamoDB access)
+- **Environment Variables**: `METADATA_TABLE_NAME` (for DynamoDB access)
 - **IAM Permissions**: Read access to S3 input bucket, read/write to DynamoDB table
+- **X-Ray Tracing (Issue #10)**: Active tracing enabled for distributed tracing
+- **Structured Logging (Issue #10)**: JSON-formatted logs with request IDs, status, error details
+  - Log format: `{"message": "...", "level": "INFO/ERROR", "request_id": "...", "audio_id": "...", "status": "..."}`
+  - Enables efficient CloudWatch Logs Insights queries
 
 #### AWS Step Functions State Machine
 
@@ -454,6 +505,9 @@ The state machine currently implements:
 - **Standard Workflow**: Using Standard (not Express) for audit trail and visual monitoring
 - **Timeout**: 5 minutes (prevents hung executions)
 - **Tracing**: Enabled for full distributed tracing
+- **Tracing**: X-Ray enabled for full distributed tracing (Issue #10)
+
+**Issue #10 Enhancements - Advanced Error Handling & Retry Policies**:
 
 **Why Step Functions?**
 - Visual workflow design and monitoring
@@ -613,6 +667,33 @@ For simple, single-step processing, direct Lambda invocation from EventBridge is
 - **AWS Config**: Tracks resource configuration changes over time
 
 ### Observability and Monitoring
+#### CloudWatch Alarms (Issue #10)
+
+**State Machine Execution Failures Alarm**:
+- **Metric**: `AWS/States` namespace, `ExecutionsFailed` metric
+- **Threshold**: ≥ 1 failed execution
+- **Evaluation Period**: 5 minutes
+- **Purpose**: Immediate alert on any state machine execution failure
+- **Action**: Can be configured to trigger SNS topic for operations team
+
+**Lambda Error Rate Alarm**:
+- **Metric**: `AWS/Lambda` namespace, `Errors` metric
+- **Threshold**: ≥ 5 errors
+- **Evaluation Period**: 5 minutes
+- **Purpose**: Alert on high Lambda error rates indicating systematic issues
+- **Action**: Triggers investigation of Lambda function errors
+
+**Additional Recommended Alarms** (Future):
+- DynamoDB throttling alarms
+- SNS topic delivery failures
+- Lambda duration exceeding timeout
+- Cost budget alarms
+
+#### Retry Policies (Issue #10)
+
+All critical tasks have exponential backoff retry policies configured to handle transient failures gracefully without manual intervention. See individual task descriptions above for specific retry configurations.
+
+#### Logging
 
 **Logging**:
 - **CloudWatch Logs**: All Lambda functions log to dedicated log groups with structured JSON logs
@@ -639,6 +720,15 @@ For simple, single-step processing, direct Lambda invocation from EventBridge is
 - **Service Map**: Visualizes component dependencies and bottlenecks
 - **Trace Analysis**: Identifies slow operations and error patterns
 - **Sampling**: Configurable sampling rate to control costs (e.g., 10% in prod, 100% in dev)
+- **Lambda Function**: Active tracing mode with custom annotations
+- **State Machine**: Tracing enabled for end-to-end visibility
+- **Annotations**: Request IDs, audio IDs for easy filtering
+- **Metadata**: Input parameters, validation results, error details
+
+**Structured Logging (Issue #10)**:
+- JSON-formatted logs from Lambda functions
+- Includes: request_id, function_name, audio_id, bucket, status, error details
+- Enables powerful CloudWatch Logs Insights queries
 
 ### Cost Optimization
 
@@ -967,12 +1057,21 @@ This architecture will be implemented incrementally following strict TDD princip
 - Transcoding and optimization pipeline
 - Parallel processing with Map states
 - Choice states for conditional logic
+- ✅ Issue #10: Advanced error handling, retry policies, and observability (CURRENT)
+  - ✅ Retry policies on Lambda, Polly, DynamoDB tasks
+  - ✅ Specific error type handling in Catch blocks
+  - ✅ X-Ray tracing on Lambda and State Machine
+  - ✅ Structured JSON logging in Lambda
+  - ✅ CloudWatch Alarms for critical failures
+  - ✅ Exponential backoff for transient failures
 - Integration tests for end-to-end flow
 - Load testing and performance optimization
 **Phase 4: Observability** (Issues #16-20) (Previous "Phase 2")
-- CloudWatch custom metrics and dashboards
-- CloudWatch Alarms for critical paths
+- Issue #11: Full audio processing implementation & output handling
 - Advanced X-Ray tracing configuration
+  - Enhanced Polly integration (read from event, store to S3)
+  - Audio file storage to S3 output bucket
+  - Complete end-to-end processing flow
 - Cost monitoring and optimization
 - Integration tests for end-to-end flow
 
@@ -987,8 +1086,16 @@ This architecture will be implemented incrementally following strict TDD princip
 
 ---
 **Document Version**: 3.0.0  
+- ✅ Manual approval gate for production deployments
 **Last Updated**: 2024 (Issue #9: Pipeline Testing, Refinement, and Deployment Preparation)  
 **Status**: Living Document - Updated with each implementation phase
+
+**Phase 4: Robustness & Production Readiness** (Issue #10) ✅ COMPLETED
+- ✅ Advanced error handling with specific error types
+- ✅ Retry policies with exponential backoff
+- ✅ X-Ray distributed tracing
+- ✅ Structured logging with JSON output
+- ✅ CloudWatch Alarms for critical metrics
 
 **Changes in v3.0.0 (Issue #9)**:
 - Added comprehensive deployment and CI/CD architecture section
@@ -1001,6 +1108,16 @@ This architecture will be implemented incrementally following strict TDD princip
 - Added manual approval workflow for production
 - Enhanced CloudFormation outputs documentation
 - Multi-environment support fully documented
+
+**Changes in v4.0.0 (Issue #10)**:
+- Added comprehensive retry policies section
+- Documented exponential backoff strategy for all tasks
+- Added CloudWatch Alarms architecture
+- Enhanced observability section with X-Ray details
+- Documented structured logging format and benefits
+- Updated Mermaid diagram to show retry flows
+- Added specific error type handling documentation
+- Completed Phase 4 of implementation roadmap
 
 **Changes in v2.0.0 (Issue #8)**:
 - Complete end-to-end pipeline flow documented
