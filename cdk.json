@@ -13,6 +13,55 @@
     ]
   },
   "context": {
+    "environments": {
+      "dev": {
+        "account": "111111111111",
+        "region": "us-east-1",
+        "logRetentionDays": 7,
+        "enableXRay": true,
+        "xraySamplingRate": 1.0,
+        "dynamoDbBillingMode": "PAY_PER_REQUEST",
+        "stateMachineTimeoutMinutes": 5,
+        "lambdaMemorySize": 256,
+        "lambdaTimeout": 30
+      },
+      "stage": {
+        "account": "111111111111",
+        "region": "us-east-1",
+        "logRetentionDays": 14,
+        "enableXRay": true,
+        "xraySamplingRate": 0.5,
+        "dynamoDbBillingMode": "PAY_PER_REQUEST",
+        "stateMachineTimeoutMinutes": 5,
+        "lambdaMemorySize": 256,
+        "lambdaTimeout": 30
+      },
+      "prod": {
+        "account": "222222222222",
+        "region": "us-east-1",
+        "logRetentionDays": 90,
+        "enableXRay": true,
+        "xraySamplingRate": 0.1,
+        "dynamoDbBillingMode": "PAY_PER_REQUEST",
+        "stateMachineTimeoutMinutes": 10,
+        "lambdaMemorySize": 512,
+        "lambdaTimeout": 60
+      }
+    },
+    "deployment": {
+      "pipelineEnabled": true,
+      "githubRepo": "your-org/cdk-sleep-go-qdev",
+      "githubBranch": "main",
+      "requireManualApprovalForProd": true,
+      "enableCrossAccountDeployment": true,
+      "deploymentRegions": [
+        "us-east-1"
+      ],
+      "costAllocationTags": {
+        "Project": "SleepAudioPipeline",
+        "CostCenter": "Engineering"
+      }
+    },
     "@aws-cdk-containers/ecs-service-extensions:enableDefaultLogDriver": true,
     "@aws-cdk/aws-apigateway:authorizerChangeDeploymentLogicalId": true,
     "@aws-cdk/aws-apigateway:disableCloudWatchRole": true,

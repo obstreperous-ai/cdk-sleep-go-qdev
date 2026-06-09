@@ -670,6 +670,109 @@ For simple, single-step processing, direct Lambda invocation from EventBridge is
 - Log aggregation: Ship logs to S3 for long-term storage (cheaper than CloudWatch Logs)
 
 ### Multi-Environment Support
+## Deployment and CI/CD Architecture (Issue #9)
+
+### Deployment Pipeline Overview
+
+The Sleep Audio Pipeline uses AWS CDK Pipelines for automated, multi-environment deployment with built-in testing and approval workflows.
+
+**Pipeline Diagram:**
+
+```mermaid
+flowchart LR
+    subgraph Source["Source Stage"]
+        GH[GitHub Repository<br/>Main Branch]
+    end
+    
+    subgraph Build["Build Stage"]
+        SYNTH[CDK Synth<br/>Run Tests<br/>Generate CloudFormation]
+    end
+    
+    subgraph SelfMutate["Self-Mutation"]
+        UPDATE[Update Pipeline<br/>Self-Modifying]
+    end
+    
+    subgraph DevDeploy["Dev Deployment"]
+        DEV_STACK[Deploy to Dev<br/>Account: 111111111111<br/>Region: us-east-1]
+        DEV_TEST[Post-Deploy Tests<br/>Smoke Tests]
+    end
+    
+    subgraph StageDeploy["Stage Deployment"]
+        STAGE_STACK[Deploy to Stage<br/>Account: 111111111111<br/>Region: us-east-1]
+        STAGE_TEST[Integration Tests<br/>Load Tests]
+    end
+    
+    subgraph ProdApproval["Production Approval"]
+        MANUAL[Manual Approval<br/>Required]
+    end
+    
+    subgraph ProdDeploy["Production Deployment"]
+        PROD_STACK[Deploy to Prod<br/>Account: 222222222222<br/>Region: us-east-1]
+        PROD_MONITOR[Post-Deploy Monitoring<br/>CloudWatch Alarms]
+    end
+    
+    GH --> SYNTH
+    SYNTH --> UPDATE
+    UPDATE --> DEV_STACK
+    DEV_STACK --> DEV_TEST
+    DEV_TEST --> STAGE_STACK
+    STAGE_STACK --> STAGE_TEST
+    STAGE_TEST --> MANUAL
+    MANUAL -->|Approved| PROD_STACK
+    PROD_STACK --> PROD_MONITOR
+    
+    style GH fill:#e1f5ff
+    style SYNTH fill:#c8e6c9
+    style UPDATE fill:#fff9c4
+    style DEV_STACK fill:#bbdefb
+    style STAGE_STACK fill:#c5cae9
+    style MANUAL fill:#ffcc80
+    style PROD_STACK fill:#c8e6c9
+```
+
+### Environment Configuration
+
+**Environment-Specific Settings** (from `cdk.json`):
+
+| Configuration | Dev | Stage | Prod |
+|--------------|-----|-------|------|
+| **Account ID** | 111111111111 | 111111111111 | 222222222222 |
+| **Region** | us-east-1 | us-east-1 | us-east-1 |
+| **Log Retention** | 7 days | 14 days | 90 days |
+| **X-Ray Sampling** | 100% (1.0) | 50% (0.5) | 10% (0.1) |
+| **DynamoDB Billing** | PAY_PER_REQUEST | PAY_PER_REQUEST | PAY_PER_REQUEST |
+| **State Machine Timeout** | 5 minutes | 5 minutes | 10 minutes |
+| **Lambda Memory** | 256 MB | 256 MB | 512 MB |
+| **Lambda Timeout** | 30 seconds | 30 seconds | 60 seconds |
+
+### Resource Naming Strategy (Issue #9)
+
+All resources follow environment-specific naming conventions for clear identification and cost allocation:
+
+**Pattern**: `{base-name}-{environment}`
+
+**Examples**:
+- **Dev Environment**:
+  - S3 Buckets: `sleep-audio-input-dev`, `sleep-audio-output-dev`
+  - DynamoDB Table: `SleepAudioMetadataTable-dev`
+  - Lambda Function: `SleepAudioProcessor-dev`
+  - State Machine: `SleepAudioPipelineStateMachine-dev`
+
+- **Prod Environment**:
+  - S3 Buckets: `sleep-audio-input-prod`, `sleep-audio-output-prod`
+  - DynamoDB Table: `SleepAudioMetadataTable-prod`
+  - Lambda Function: `SleepAudioProcessor-prod`
+  - State Machine: `SleepAudioPipelineStateMachine-prod`
+
+### Resource Tagging Strategy
+
+All resources are tagged for cost allocation, governance, and automation:
+
+- `Environment`: dev | stage | prod
+- `Project`: SleepAudioPipeline
+- `ManagedBy`: CDK
+- `CostCenter`: Engineering (from context)
+
 
 **Environment Separation**:
 - **Dev**: Rapid iteration, lower cost, relaxed security for testing
@@ -714,6 +817,48 @@ For simple, single-step processing, direct Lambda invocation from EventBridge is
 - Rollback capability via CloudFormation stack updates
 
 ## Future Extensibility
+### Deployment Commands
+
+**Deploy to specific environment:**
+```bash
+# Deploy to dev
+cdk deploy --context environment=dev
+
+# Deploy to stage
+cdk deploy --context environment=stage
+
+# Deploy to prod
+cdk deploy --context environment=prod
+```
+
+**Synthesize CloudFormation for specific environment:**
+```bash
+cdk synth --context environment=prod
+```
+
+**View changes before deployment:**
+```bash
+cdk diff --context environment=prod
+```
+
+### CDK Pipeline Deployment (Automated CI/CD)
+
+**Initial Pipeline Setup:**
+```bash
+# Deploy the pipeline stack (one-time setup)
+cdk deploy PipelineStack
+```
+
+**Subsequent Deployments:**
+- Push code to `main` branch
+- Pipeline automatically:
+  1. Synthesizes CDK app
+  2. Runs tests
+  3. Deploys to dev
+  4. Deploys to stage
+  5. Waits for manual approval
+  6. Deploys to prod (after approval)
+
 
 ### Planned Enhancements
 
@@ -812,6 +957,7 @@ This architecture will be implemented incrementally following strict TDD princip
 - Issue #8: Enhanced Polly integration (read from event, store to S3)
 - ✅ Issue #6: SNS topics for notifications + error handling
 - ✅ Issue #7: Lambda function integration for audio processing
+- ✅ Issue #9: Pipeline testing, refinement, and deployment preparation (CURRENT)
 - ✅ Issue #8: Complete pipeline integration with input validation (CURRENT)
 
 - AWS Bedrock integration for AI-generated audio
@@ -830,19 +976,33 @@ This architecture will be implemented incrementally following strict TDD princip
 - Cost monitoring and optimization
 - Integration tests for end-to-end flow
 
-**Phase 5: Multi-Environment** (Issues #21-25)
-- CDK context-based configuration
-- Environment-specific resource naming
-- Deployment pipelines per environment
-- Performance testing and optimization
-- Blue/green deployment strategy
+**Phase 3: Deployment & Multi-Environment** (Issue #9) ✅ COMPLETED
+- ✅ Multi-environment support (dev, stage, prod)
+- ✅ Environment-specific resource naming
+- ✅ CDK Pipeline construct for automated deployment
+- ✅ Environment context configuration in cdk.json
+- ✅ Resource tagging for cost allocation
+- ✅ CloudFormation outputs for all major resources
+- ✅ Manual approval gate for production deployments
 
 ---
-**Document Version**: 2.0.0  
-**Last Updated**: 2024 (Issue #8: Complete Pipeline Integration with Input Validation)  
+**Document Version**: 3.0.0  
+**Last Updated**: 2024 (Issue #9: Pipeline Testing, Refinement, and Deployment Preparation)  
 **Status**: Living Document - Updated with each implementation phase
 
-**Changes in v2.0.0**:
+**Changes in v3.0.0 (Issue #9)**:
+- Added comprehensive deployment and CI/CD architecture section
+- Documented CDK Pipelines implementation with Mermaid diagram
+- Added environment-specific configuration table
+- Documented resource naming strategy with examples
+- Added resource tagging strategy for cost allocation
+- Included deployment commands and workflows
+- Updated implementation roadmap to reflect completion
+- Added manual approval workflow for production
+- Enhanced CloudFormation outputs documentation
+- Multi-environment support fully documented
+
+**Changes in v2.0.0 (Issue #8)**:
 - Complete end-to-end pipeline flow documented
 - Comprehensive Mermaid diagram with all components and data flows
 - Input validation points documented
