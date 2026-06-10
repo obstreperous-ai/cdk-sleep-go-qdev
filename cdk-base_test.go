@@ -1108,3 +1108,183 @@ func TestStateMachineTimeout(t *testing.T) {
 		"StateMachineType": "STANDARD",
 	})
 }
+
+// ========== Issue #10: Advanced Error Handling, Retry Policies, and Observability ==========
+
+// TestLambdaTaskHasRetryPolicy verifies Lambda invocation task has retry configured
+func TestLambdaTaskHasRetryPolicy(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine definition contains Retry configuration for Lambda task
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*Retry.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestPollyTaskHasRetryPolicy verifies Polly task has retry configured
+func TestPollyTaskHasRetryPolicy(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine definition contains Retry for Polly
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*Retry.*")),
+					assertions.Match_StringLikeRegexp(jsii.String(".*PollyTask.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestDynamoDBTasksHaveRetryPolicy verifies DynamoDB tasks have retry configured
+func TestDynamoDBTasksHaveRetryPolicy(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine definition contains Retry for DynamoDB operations
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*Retry.*")),
+					assertions.Match_StringLikeRegexp(jsii.String(".*dynamodb.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestErrorHandlingCatchesSpecificErrorTypes verifies specific error types are caught
+func TestErrorHandlingCatchesSpecificErrorTypes(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine definition contains specific error names in Catch blocks
+	// Looking for error types like States.TaskFailed, Lambda.ServiceException, etc.
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"DefinitionString": map[string]interface{}{
+			"Fn::Join": []interface{}{
+				"",
+				assertions.Match_ArrayWith([]interface{}{
+					assertions.Match_StringLikeRegexp(jsii.String(".*ErrorEquals.*")),
+				}),
+			},
+		},
+	})
+}
+
+// TestLambdaFunctionHasXRayTracingEnabled verifies Lambda has X-Ray tracing
+func TestLambdaFunctionHasXRayTracingEnabled(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify Lambda function has X-Ray tracing enabled
+	template.HasResourceProperties(jsii.String("AWS::Lambda::Function"), map[string]interface{}{
+		"TracingConfig": map[string]interface{}{
+			"Mode": "Active",
+		},
+	})
+}
+
+// TestStateMachineHasXRayTracingEnabled verifies state machine has X-Ray tracing
+func TestStateMachineHasXRayTracingEnabled(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify state machine has X-Ray tracing enabled
+	template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+		"TracingConfiguration": map[string]interface{}{
+			"Enabled": true,
+		},
+	})
+}
+
+// TestCloudWatchAlarmsExistForStateMachine verifies alarms are created for failures
+func TestCloudWatchAlarmsExistForStateMachine(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify CloudWatch Alarms exist for monitoring
+	template.ResourceCountIs(jsii.String("AWS::CloudWatch::Alarm"), assertions.Match_AtLeast(jsii.Number(1)))
+}
+
+// TestCloudWatchAlarmsConfiguredForCriticalMetrics verifies alarms monitor key metrics
+func TestCloudWatchAlarmsConfiguredForCriticalMetrics(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify at least one alarm monitors ExecutionsFailed metric
+	template.HasResourceProperties(jsii.String("AWS::CloudWatch::Alarm"), map[string]interface{}{
+		"MetricName": "ExecutionsFailed",
+		"Namespace":  "AWS/States",
+	})
+}

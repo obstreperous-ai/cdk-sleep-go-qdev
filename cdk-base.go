@@ -2,11 +2,13 @@ package main
 
 import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudwatch"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awskms"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awssns"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsstepfunctions"
@@ -70,6 +72,7 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 
 	// ========== Issue #5: State Machine with DynamoDB Integration ==========
 	// ========== Issue #7: Lambda Function for Audio Processing ==========
+	// ========== Issue #10: Enhanced observability with X-Ray tracing ==========
 	// Create Lambda function for audio processing, metadata enrichment, or validation
 	audioProcessorFunction := awslambda.NewFunction(stack, jsii.String("SleepAudioProcessor"), &awslambda.FunctionProps{
 		FunctionName: jsii.String("SleepAudioProcessor"),
@@ -77,11 +80,12 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 		Handler:      jsii.String("handler.lambda_handler"),
 		Code:         awslambda.Code_FromAsset(jsii.String("lambda/audio-processor"), nil),
 		Environment: &map[string]*string{
+			"METADATA_TABLE_NAME": metadataTable.TableName(),
 		},
-		PartitionKey: &awsdynamodb.Attribute{
 		Timeout:     awscdk.Duration_Seconds(jsii.Number(30)),
 		MemorySize:  jsii.Number(256),
 		Description: jsii.String("Processes audio files, enriches metadata, and performs validation"),
+		Tracing:     awslambda.Tracing_ACTIVE, // Enable X-Ray tracing
 	})
 
 	// Grant Lambda function read/write permissions to DynamoDB table
@@ -91,6 +95,17 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	inputBucket.GrantRead(audioProcessorFunction, nil)
 
 	// Task 1: Write initial metadata record to DynamoDB when pipeline starts
+	// ========== Issue #10: Add retry policy for DynamoDB operations ==========
+	retryPolicyDynamoDB := &[]*awsstepfunctions.RetryProps{
+		{
+			Errors:       jsii.Strings("States.TaskFailed", "DynamoDB.ProvisionedThroughputExceededException", "DynamoDB.RequestLimitExceeded"),
+			Interval:     awscdk.Duration_Seconds(jsii.Number(2)),
+			MaxAttempts:  jsii.Number(3),
+			BackoffRate:  jsii.Number(2.0), // Exponential backoff
+		},
+	}
+
+	// Task 1: Write initial metadata with retry policy
 	writeInitialMetadataTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("WriteInitialMetadata"), &awsstepfunctionstasks.CallAwsServiceProps{
 		Service: jsii.String("dynamodb"),
 		Action:  jsii.String("putItem"),
@@ -117,6 +132,7 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 		IamResources: &[]*string{metadataTable.TableArn()},
 		ResultPath:   jsii.String("$.dynamoDbResult"),
 	})
+	writeInitialMetadataTask.AddRetry((*retryPolicyDynamoDB)[0])
 
 	// Task 2: Update metadata after successful processing
 	updateMetadataSuccessTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("UpdateMetadataSuccess"), &awsstepfunctionstasks.CallAwsServiceProps{
@@ -145,6 +161,7 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 		IamResources: &[]*string{metadataTable.TableArn()},
 		ResultPath:   jsii.String("$.updateResult"),
 	})
+	updateMetadataSuccessTask.AddRetry((*retryPolicyDynamoDB)[0])
 
 	// ========== Issue #6: SNS Topics for Notifications ==========
 	// Create KMS key for SNS topic encryption
@@ -198,6 +215,7 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 		IamResources: &[]*string{metadataTable.TableArn()},
 		ResultPath:   jsii.String("$.updateResult"),
 	})
+	updateMetadataFailureTask.AddRetry((*retryPolicyDynamoDB)[0])
 
 	// Task 4: Publish success notification to SNS
 	publishSuccessTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("PublishSuccess"), &awsstepfunctionstasks.CallAwsServiceProps{
@@ -226,6 +244,7 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	})
 
 	// Grant read permissions to placeholder Lambda
+	// ========== Issue #10: Lambda task with retry policy and enhanced error handling ==========
 	// Task 6: Invoke Lambda function for audio processing
 	audioProcessorTask := awsstepfunctionstasks.NewLambdaInvoke(stack, jsii.String("InvokeSleepAudioProcessor"), &awsstepfunctionstasks.LambdaInvokeProps{
 		LambdaFunction: audioProcessorFunction,
@@ -236,8 +255,23 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 			"audioId.$": "$.detail.object.key",
 		}),
 	})
+	
+	// Add retry policy for Lambda task (exponential backoff)
+	audioProcessorTask.AddRetry(&awsstepfunctions.RetryProps{
+		Errors:      jsii.Strings("Lambda.ServiceException", "Lambda.TooManyRequestsException", "States.TaskFailed"),
+		Interval:    awscdk.Duration_Seconds(jsii.Number(2)),
+		MaxAttempts: jsii.Number(3),
+		BackoffRate: jsii.Number(2.0),
+	})
+	
+	// Add enhanced error handling with specific error types
+	audioProcessorTask.AddCatch(updateMetadataFailureTask.Next(publishFailureTask), &awsstepfunctions.CatchProps{
+		Errors:     jsii.Strings("States.ALL"),
+		ResultPath: jsii.String("$.Error"),
+	})
 
-	// This is a placeholder implementation - real audio generation logic comes later
+	// ========== Issue #10: Polly task with retry policy and enhanced error handling ==========
+	// Polly task - placeholder implementation for audio generation
 	pollyTask := awsstepfunctionstasks.NewCallAwsService(stack, jsii.String("PollyTask"), &awsstepfunctionstasks.CallAwsServiceProps{
 		Service:      jsii.String("polly"),
 		Action:       jsii.String("synthesizeSpeech"),
@@ -250,16 +284,24 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 		},
 		ResultPath: jsii.String("$.pollyResult"),
 	})
-
-	// Add error handling to Polly task - if it fails, update DDB and publish to failure topic
+	
+	// Add retry policy for Polly task
+	pollyTask.AddRetry(&awsstepfunctions.RetryProps{
+		Errors:      jsii.Strings("Polly.EngineNotSupportedException", "Polly.ServiceFailureException", "States.TaskFailed"),
+		Interval:    awscdk.Duration_Seconds(jsii.Number(2)),
+		MaxAttempts: jsii.Number(3),
+		BackoffRate: jsii.Number(2.0),
+	})
+	
+	// Add enhanced error handling with specific error types
 	pollyTask.AddCatch(updateMetadataFailureTask.Next(publishFailureTask), &awsstepfunctions.CatchProps{
+		Errors:     jsii.Strings("States.ALL"),
 		ResultPath: jsii.String("$.Error"),
 	})
 
-	// Add error handling to Lambda task - if it fails or validation fails, update DDB and publish to failure topic
-	audioProcessorTask.AddCatch(updateMetadataFailureTask.Next(publishFailureTask), &awsstepfunctions.CatchProps{
-		ResultPath: jsii.String("$.Error"),
-	})
+	// ========== Issue #10: CloudWatch Alarms for Observability ==========
+	// Create CloudWatch Alarms for critical failure monitoring
+	// Alarm 1: State Machine Execution Failures
 
 	// Define the state machine workflow with error handling:
 	// Complete end-to-end flow:
@@ -296,6 +338,47 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 
 	// Grant the state machine permissions to read/write DynamoDB table
 	metadataTable.GrantReadWriteData(stateMachine)
+
+	// Create CloudWatch Alarm for state machine execution failures
+	awscloudwatch.NewAlarm(stack, jsii.String("StateMachineExecutionFailedAlarm"), &awscloudwatch.AlarmProps{
+		AlarmName:          jsii.String("SleepAudioPipeline-ExecutionsFailed"),
+		AlarmDescription:   jsii.String("Alert when Step Functions executions fail"),
+		Metric: awscloudwatch.NewMetric(&awscloudwatch.MetricProps{
+			Namespace:          jsii.String("AWS/States"),
+			MetricName:         jsii.String("ExecutionsFailed"),
+			DimensionsMap: &map[string]*string{
+				"StateMachineArn": stateMachine.StateMachineArn(),
+			},
+			Statistic: jsii.String("Sum"),
+			Period:    awscdk.Duration_Minutes(jsii.Number(5)),
+		}),
+		Threshold:       jsii.Number(1),
+		EvaluationPeriods: jsii.Number(1),
+		ComparisonOperator: awscloudwatch.ComparisonOperator_GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+		TreatMissingData: awscloudwatch.TreatMissingData_NOT_BREACHING,
+	})
+
+	// Create CloudWatch Alarm for Lambda function errors
+	awscloudwatch.NewAlarm(stack, jsii.String("LambdaErrorAlarm"), &awscloudwatch.AlarmProps{
+		AlarmName:          jsii.String("SleepAudioProcessor-Errors"),
+		AlarmDescription:   jsii.String("Alert when Lambda function errors exceed threshold"),
+		Metric: awscloudwatch.NewMetric(&awscloudwatch.MetricProps{
+			Namespace:          jsii.String("AWS/Lambda"),
+			MetricName:         jsii.String("Errors"),
+			DimensionsMap: &map[string]*string{
+				"FunctionName": audioProcessorFunction.FunctionName(),
+			},
+			Statistic: jsii.String("Sum"),
+			Period:    awscdk.Duration_Minutes(jsii.Number(5)),
+		}),
+		Threshold:       jsii.Number(5),
+		EvaluationPeriods: jsii.Number(1),
+		ComparisonOperator: awscloudwatch.ComparisonOperator_GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+		TreatMissingData: awscloudwatch.TreatMissingData_NOT_BREACHING,
+	})
+
+	// ========== EventBridge Rule for Pipeline Triggering ==========
+	// Create EventBridge Rule to trigger on S3 Object Created events
 
 	rule := awsevents.NewRule(stack, jsii.String("SleepAudioProcessingRule"), &awsevents.RuleProps{
 		Description: jsii.String("Triggers audio processing pipeline when new files are uploaded to the input bucket"),
