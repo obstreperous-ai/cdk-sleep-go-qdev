@@ -3,12 +3,14 @@ Sleep Audio Processor Lambda Function
 Validates input, enriches metadata, and processes audio files in the pipeline.
 
 Issue #10: Enhanced with structured logging and X-Ray tracing support.
+Issue #11: Core audio processing logic implementation.
 """
 
 import json
 import logging
 import os
 import boto3
+from datetime import datetime
 from aws_xray_sdk.core import xray_recorder
 from aws_xray_sdk.core import patch_all
 
@@ -24,6 +26,7 @@ ddb = boto3.resource('dynamodb')
 
 # Environment variables
 table_name = os.environ.get('METADATA_TABLE_NAME', '')
+output_bucket_name = os.environ.get('OUTPUT_BUCKET_NAME', '')
 
 
 def log_structured(level, message, **kwargs):
@@ -54,6 +57,91 @@ SUPPORTED_AUDIO_FORMATS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.txt']
 class ValidationError(Exception):
     """Custom exception for input validation errors"""
     pass
+
+
+@xray_recorder.capture('download_from_s3')
+def download_audio_from_s3(bkt, obj_key):
+    """Download file from S3"""
+    s3_svc = boto3.client('s3')
+    try:
+        obj_response = s3_svc.get_object(Bucket=bkt, Key=obj_key)
+        file_bytes = obj_response['Body'].read()
+        log_structured('INFO', 'S3 download success', bucket=bkt, key=obj_key, bytes=len(file_bytes))
+        return file_bytes
+    except Exception as download_err:
+        log_structured('ERROR', 'S3 download error', bucket=bkt, key=obj_key, err=str(download_err))
+        raise
+
+
+@xray_recorder.capture('polly_synthesis')
+def synthesize_audio_with_polly(input_text, voice='Joanna', eng='neural'):
+    """Use Polly to create audio"""
+    polly_svc = boto3.client('polly')
+    try:
+        polly_response = polly_svc.synthesize_speech(
+            Text=input_text,
+            VoiceId=voice,
+            OutputFormat='mp3',
+            Engine=eng
+        )
+        audio_bytes = polly_response['AudioStream'].read()
+        mime_type = polly_response.get('ContentType', 'audio/mpeg')
+        calc_duration = int((len(input_text) / 5) / 150 * 60)
+        log_structured('INFO', 'Polly success', voice=voice, bytes=len(audio_bytes))
+        return {
+            'audio_data': audio_bytes,
+            'content_type': mime_type,
+            'duration': calc_duration
+        }
+    except Exception as polly_err:
+        log_structured('ERROR', 'Polly error', voice=voice, err=str(polly_err))
+        raise
+
+
+@xray_recorder.capture('s3_upload')
+def upload_to_output_bucket(data_bytes, s3_key, mime='audio/mpeg'):
+    """Upload to S3 output bucket"""
+    if not output_bucket_name:
+        raise Exception("No OUTPUT_BUCKET_NAME configured")
+    s3_svc = boto3.client('s3')
+    try:
+        s3_svc.put_object(
+            Bucket=output_bucket_name,
+            Key=s3_key,
+            Body=data_bytes,
+            ContentType=mime
+        )
+        s3_uri = f's3://{output_bucket_name}/{s3_key}'
+        log_structured('INFO', 'S3 upload success', bucket=output_bucket_name, key=s3_key)
+        return {'output_uri': s3_uri, 'output_key': s3_key}
+    except Exception as upload_err:
+        log_structured('ERROR', 'S3 upload error', key=s3_key, err=str(upload_err))
+        raise
+
+
+@xray_recorder.capture('ddb_metadata_update')
+def update_metadata_with_output(item_id, metadata_dict):
+    """Update DynamoDB with output info"""
+    ddb_table = ddb.Table(table_name)
+    ddb_table.update_item(
+        Key={'audioId': item_id},
+        UpdateExpression='SET outputUri = :uri_val, outputKey = :key_val, fileSize = :size_val, duration = :dur_val',
+        ExpressionAttributeValues={
+            ':uri_val': metadata_dict.get('output_uri', ''),
+            ':key_val': metadata_dict.get('output_key', ''),
+            ':size_val': metadata_dict.get('file_size', 0),
+            ':dur_val': metadata_dict.get('duration', 0)
+        }
+    )
+
+
+def generate_output_key(input_path):
+    """Create output key with timestamp"""
+    base_name = input_path.split('/')[-1]
+    without_ext = base_name.rsplit('.', 1)[0]
+    file_ext = base_name.rsplit('.', 1)[1] if '.' in base_name else 'mp3'
+    time_stamp = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+    return f'processed/{without_ext}-{time_stamp}.{file_ext}'
 
 
 def validate_input(bucket, audio_id):
@@ -162,6 +250,54 @@ def lambda_handler(event, context):
         #     raise
         
     except ValidationError as e:
+        # ========== Issue #11: Audio Processing ==========
+        
+        file_format = validation_result.get('format', '')
+        
+        if file_format == '.txt':
+            log_structured('INFO', 'Text input detected',
+                          request_id=request_id,
+                          audio_id=audio_id)
+            text_bytes = download_audio_from_s3(bucket, audio_id)
+            tts_input = text_bytes.decode('utf-8')
+        else:
+            log_structured('INFO', 'Audio input detected',
+                          request_id=request_id,
+                          audio_id=audio_id)
+            download_audio_from_s3(bucket, audio_id)
+            tts_input = "Welcome to your peaceful sleep session. Let the calming sounds guide you into deep, restful sleep. Breathe slowly and deeply. Release all tension. You are safe, relaxed, and at peace."
+        
+        log_structured('INFO', 'Starting synthesis',
+                      request_id=request_id,
+                      audio_id=audio_id)
+        
+        synth_output = synthesize_audio_with_polly(
+            input_text=tts_input[:3000],
+            voice='Joanna',
+            eng='neural'
+        )
+        
+        output_path = generate_output_key(audio_id)
+        
+        log_structured('INFO', 'Uploading result',
+                      request_id=request_id,
+                      audio_id=audio_id,
+                      output_key=output_path)
+        
+        upload_info = upload_to_output_bucket(
+            data_bytes=synth_output['audio_data'],
+            s3_key=output_path,
+            mime=synth_output['content_type']
+        )
+        
+        metadata_update = {
+            **upload_info,
+            'file_size': len(synth_output['audio_data']),
+            'duration': synth_output['duration']
+        }
+        
+        update_metadata_with_output(audio_id, metadata_update)
+        
         # Log validation error and raise exception for Step Functions to catch
         log_structured('ERROR', 'Validation failed',
                       request_id=request_id,
@@ -193,14 +329,18 @@ def lambda_handler(event, context):
         'audioId': audio_id,
         'bucket': bucket,
         'format': validation_result.get('format', 'unknown'),
-        'status': 'processed',
-        'message': 'Audio validation and processing completed successfully'
+        'status': 'completed',
+        'message': 'Audio processing completed successfully',
+        'outputUri': upload_info['output_uri'],
+        'outputKey': upload_info['output_key'],
+        'duration': synth_output['duration'],
+        'fileSize': len(synth_output['audio_data'])
     }
     
     log_structured('INFO', 'Processing completed successfully',
                   request_id=request_id,
                   audio_id=audio_id,
-                  status='completed',
-                  format=validation_result.get('format', 'unknown'))
+                  output_uri=upload_info['output_uri'],
+                  status='completed')
     
     return result
