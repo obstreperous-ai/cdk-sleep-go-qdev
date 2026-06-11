@@ -6,6 +6,7 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awskms"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
@@ -73,7 +74,7 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	// ========== Issue #5: State Machine with DynamoDB Integration ==========
 	// ========== Issue #7: Lambda Function for Audio Processing ==========
 	// ========== Issue #10: Enhanced observability with X-Ray tracing ==========
-	// Create Lambda function for audio processing, metadata enrichment, or validation
+	// ========== Issue #11: Core audio processing logic with Polly integration ==========
 	audioProcessorFunction := awslambda.NewFunction(stack, jsii.String("SleepAudioProcessor"), &awslambda.FunctionProps{
 		FunctionName: jsii.String("SleepAudioProcessor"),
 		Runtime:      awslambda.Runtime_PYTHON_3_12(),
@@ -81,6 +82,7 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 		Code:         awslambda.Code_FromAsset(jsii.String("lambda/audio-processor"), nil),
 		Environment: &map[string]*string{
 			"METADATA_TABLE_NAME": metadataTable.TableName(),
+			"OUTPUT_BUCKET_NAME":  outputBucket.BucketName(),
 		},
 		Timeout:     awscdk.Duration_Seconds(jsii.Number(30)),
 		MemorySize:  jsii.Number(256),
@@ -93,6 +95,16 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 
 	// Grant Lambda function read access to input bucket (for future file validation)
 	inputBucket.GrantRead(audioProcessorFunction, nil)
+
+	// ========== Issue #11: Grant Lambda permissions for audio processing and output handling ==========
+	// Grant Lambda write access to output bucket for processed audio files
+	outputBucket.GrantWrite(audioProcessorFunction, nil)
+
+	// Grant Lambda permission to use Amazon Polly for text-to-speech synthesis
+	audioProcessorFunction.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Actions:   jsii.Strings("polly:SynthesizeSpeech"),
+		Resources: jsii.Strings("*"), // Polly doesn't support resource-level permissions
+	}))
 
 	// Task 1: Write initial metadata record to DynamoDB when pipeline starts
 	// ========== Issue #10: Add retry policy for DynamoDB operations ==========

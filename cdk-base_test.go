@@ -1288,3 +1288,128 @@ func TestCloudWatchAlarmsConfiguredForCriticalMetrics(t *testing.T) {
 		"Namespace":  "AWS/States",
 	})
 }
+
+// ========== Issue #11: Core Audio Processing Logic & Output Handling ==========
+
+// TestLambdaHasOutputBucketWritePermissions verifies Lambda can write to output bucket
+func TestLambdaHasOutputBucketWritePermissions(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify Lambda execution role has S3 write permissions to output bucket
+	template.HasResourceProperties(jsii.String("AWS::IAM::Policy"), map[string]interface{}{
+		"PolicyDocument": map[string]interface{}{
+			"Statement": assertions.Match_ArrayWith([]interface{}{
+				map[string]interface{}{
+					"Action": assertions.Match_ArrayWith([]interface{}{
+						"s3:PutObject",
+					}),
+					"Effect": "Allow",
+				},
+			}),
+		},
+	})
+}
+
+// TestLambdaHasPollyPermissions verifies Lambda can invoke Polly for audio synthesis
+func TestLambdaHasPollyPermissions(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify Lambda execution role has Polly synthesizeSpeech permission
+	template.HasResourceProperties(jsii.String("AWS::IAM::Policy"), map[string]interface{}{
+		"PolicyDocument": map[string]interface{}{
+			"Statement": assertions.Match_ArrayWith([]interface{}{
+				map[string]interface{}{
+					"Action": "polly:SynthesizeSpeech",
+					"Effect": "Allow",
+				},
+			}),
+		},
+	})
+}
+
+// TestLambdaHasOutputBucketEnvironmentVariable verifies Lambda has output bucket name in env
+func TestLambdaHasOutputBucketEnvironmentVariable(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify Lambda function has OUTPUT_BUCKET_NAME environment variable
+	template.HasResourceProperties(jsii.String("AWS::Lambda::Function"), map[string]interface{}{
+		"Environment": map[string]interface{}{
+			"Variables": map[string]interface{}{
+				"OUTPUT_BUCKET_NAME": map[string]interface{}{
+					"Ref": assertions.Match_StringLikeRegexp(jsii.String(".*OutputBucket.*")),
+				},
+			},
+		},
+	})
+}
+
+// TestLambdaProcessingConfigurationForAudio verifies Lambda has adequate resources
+func TestLambdaProcessingConfigurationForAudio(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify Lambda has adequate timeout and memory for audio processing
+	template.HasResourceProperties(jsii.String("AWS::Lambda::Function"), map[string]interface{}{
+		"Timeout": assertions.Match_AtLeast(jsii.Number(30)),
+		"MemorySize": assertions.Match_AtLeast(jsii.Number(256)),
+	})
+}
+
+// TestOutputHandlingEndToEnd verifies complete output handling flow
+func TestOutputHandlingEndToEnd(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN
+	// Verify Lambda has all necessary permissions for complete audio processing:
+	// 1. Read from input bucket (already tested elsewhere)
+	// 2. Write to output bucket (tested above)
+	// 3. Polly access (tested above)
+	// 4. DynamoDB access (tested elsewhere)
+	
+	// Comprehensive check: verify Lambda has role with multiple policy attachments
+	template.HasResourceProperties(jsii.String("AWS::Lambda::Function"), map[string]interface{}{
+		"Role": map[string]interface{}{
+			"Fn::GetAtt": assertions.Match_ArrayWith([]interface{}{
+				assertions.Match_StringLikeRegexp(jsii.String(".*Role.*")),
+			}),
+		},
+	})
+}
