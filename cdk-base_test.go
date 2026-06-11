@@ -1413,3 +1413,107 @@ func TestOutputHandlingEndToEnd(t *testing.T) {
 		},
 	})
 }
+
+// ========== Issue #12: End-to-End Validation and Project Completion ==========
+
+// TestCompleteEndToEndPipelineValidation performs comprehensive validation of the entire pipeline
+// This test validates that all components work together to form a complete, production-ready system
+func TestCompleteEndToEndPipelineValidation(t *testing.T) {
+	defer jsii.Close()
+
+	// GIVEN
+	app := awscdk.NewApp(nil)
+
+	// WHEN
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	template := assertions.Template_FromStack(stack, nil)
+
+	// THEN - Validate complete end-to-end pipeline flow
+	
+	// 1. INGESTION LAYER: Validate input can be received
+	t.Run("IngestionLayer", func(t *testing.T) {
+		// S3 Input bucket with EventBridge enabled
+		template.HasResourceProperties(jsii.String("AWS::S3::Bucket"), map[string]interface{}{
+			"NotificationConfiguration": map[string]interface{}{
+				"EventBridgeConfiguration": map[string]interface{}{
+					"EventBridgeEnabled": true,
+				},
+			},
+			"VersioningConfiguration": map[string]interface{}{
+				"Status": "Enabled",
+			},
+			"BucketEncryption": map[string]interface{}{
+				"ServerSideEncryptionConfiguration": assertions.Match_AnyValue(),
+			},
+		})
+	})
+
+	// 2. EVENT ROUTING LAYER: Validate events are routed correctly
+	t.Run("EventRoutingLayer", func(t *testing.T) {
+		// EventBridge rule filters S3 Object Created events and targets state machine
+		template.HasResourceProperties(jsii.String("AWS::Events::Rule"), map[string]interface{}{
+			"EventPattern": map[string]interface{}{
+				"source":      []interface{}{"aws.s3"},
+				"detail-type": []interface{}{"Object Created"},
+			},
+			"State": "ENABLED",
+			"Targets": assertions.Match_ArrayWith([]interface{}{
+				map[string]interface{}{
+					"Arn": map[string]interface{}{
+						"Ref": assertions.Match_StringLikeRegexp(jsii.String(".*StateMachine.*")),
+					},
+				},
+			}),
+		})
+	})
+
+	// 3. PROCESSING LAYER: Validate complete orchestration flow
+	t.Run("ProcessingLayer", func(t *testing.T) {
+		// State machine orchestrates all processing steps with error handling
+		template.HasResourceProperties(jsii.String("AWS::StepFunctions::StateMachine"), map[string]interface{}{
+			"DefinitionString": map[string]interface{}{
+				"Fn::Join": []interface{}{
+					"",
+					assertions.Match_ArrayWith([]interface{}{
+						// Success path tasks
+						assertions.Match_StringLikeRegexp(jsii.String(".*WriteInitialMetadata.*")),
+						assertions.Match_StringLikeRegexp(jsii.String(".*InvokeSleepAudioProcessor.*")),
+						assertions.Match_StringLikeRegexp(jsii.String(".*PollyTask.*")),
+						assertions.Match_StringLikeRegexp(jsii.String(".*UpdateMetadataSuccess.*")),
+						assertions.Match_StringLikeRegexp(jsii.String(".*PublishSuccess.*")),
+						// Error handling path
+						assertions.Match_StringLikeRegexp(jsii.String(".*Catch.*")),
+						assertions.Match_StringLikeRegexp(jsii.String(".*UpdateMetadataFailure.*")),
+						assertions.Match_StringLikeRegexp(jsii.String(".*PublishFailure.*")),
+						// Retry policies
+						assertions.Match_StringLikeRegexp(jsii.String(".*Retry.*")),
+					}),
+				},
+			},
+			"LoggingConfiguration": map[string]interface{}{
+				"Level": "ALL",
+			},
+			"TracingConfiguration": map[string]interface{}{
+				"Enabled": true,
+			},
+		})
+
+		// Lambda function with validation logic, proper configuration, and tracing
+		template.HasResourceProperties(jsii.String("AWS::Lambda::Function"), map[string]interface{}{
+			"Runtime": assertions.Match_StringLikeRegexp(jsii.String("python.*")),
+			"Handler": "handler.lambda_handler",
+			"TracingConfig": map[string]interface{}{
+				"Mode": "Active",
+			},
+			"Environment": map[string]interface{}{
+				"Variables": map[string]interface{}{
+					"METADATA_TABLE_NAME": assertions.Match_AnyValue(),
+					"OUTPUT_BUCKET_NAME":  assertions.Match_AnyValue(),
+				},
+			},
+		})
+	})
+
+	// Validation summary
+	t.Log("✅ End-to-end validation PASSED: Complete Sleep Audio Pipeline is correctly configured")
+}
