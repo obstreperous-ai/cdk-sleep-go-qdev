@@ -1,10 +1,14 @@
 # Sleep Audio Pipeline Architecture
 
+> 🔬 **Experiment Documentation**: This architecture is part of a TDD IaC experiment. For comprehensive methodology, prompting patterns, and lessons learned, see [EXPERIMENT.md](./EXPERIMENT.md).
+
 ## Overview
 
 This document serves as the **source of truth** for the event-driven sleep audio pipeline built on AWS using CDK Go. The system is designed to process sleep-related audio files through a fully serverless, event-driven architecture, ensuring scalability, reliability, security, and maintainability while following AWS Well-Architected principles.
 
 This is a living document that will evolve alongside the implementation. All architectural decisions, component interactions, and design rationale are documented here.
+
+**Related Documentation**: See [README.md](./README.md) for project overview, [META-PROMPTS.md](./META-PROMPTS.md) for reusable patterns, and [SUMMARY.md](./SUMMARY.md) for project statistics.
 
 ## System Description
 
