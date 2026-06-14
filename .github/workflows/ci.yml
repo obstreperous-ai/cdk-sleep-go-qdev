@@ -18,13 +18,24 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.25'
+        go-version: '1.21'
 
     - name: Install dependencies
       run: go mod download
 
     - name: Run tests
-      run: go test -v ./...
+      run: go test -v -coverprofile=coverage.out -covermode=atomic ./...
+
+    - name: Display coverage
+      run: go tool cover -func=coverage.out
+
+    - name: Check coverage threshold
+      run: |
+        COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}')
+        echo "Total coverage: ${COVERAGE}%"
+        if (( $(echo "$COVERAGE < 80" | bc -l) )); then
+          echo "Coverage ${COVERAGE}% is below 80% threshold"
+        fi
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
@@ -36,6 +47,12 @@ jobs:
 
     - name: CDK synth
       run: cdk synth
+
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage.out
 
     - name: Upload CloudFormation template
       uses: actions/upload-artifact@v4

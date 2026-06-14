@@ -8,15 +8,12 @@ import (
 	"github.com/aws/jsii-runtime-go"
 )
 
-// TestPipelineStackCreation verifies that the pipeline stack can be created
-func TestPipelineStackCreation(t *testing.T) {
-	defer jsii.Close()
+// Helper functions for pipeline tests
 
-	// GIVEN
+// createTestPipelineStack creates a CDK pipeline stack for testing
+func createTestPipelineStack() awscdk.Stack {
 	app := awscdk.NewApp(nil)
-
-	// WHEN
-	stack := NewPipelineStack(app, "TestPipelineStack", &PipelineStackProps{
+	return NewPipelineStack(app, "TestPipelineStack", &PipelineStackProps{
 		StackProps: awscdk.StackProps{
 			Env: &awscdk.Environment{
 				Account: jsii.String("123456789012"),
@@ -24,6 +21,14 @@ func TestPipelineStackCreation(t *testing.T) {
 			},
 		},
 	})
+}
+
+// TestPipelineStackCreation verifies that the pipeline stack can be created
+func TestPipelineStackCreation(t *testing.T) {
+	defer jsii.Close()
+
+	// WHEN
+	stack := createTestPipelineStack()
 
 	// THEN
 	if stack == nil {
@@ -35,18 +40,8 @@ func TestPipelineStackCreation(t *testing.T) {
 func TestPipelineExists(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewPipelineStack(app, "TestPipelineStack", &PipelineStackProps{
-		StackProps: awscdk.StackProps{
-			Env: &awscdk.Environment{
-				Account: jsii.String("123456789012"),
-				Region:  jsii.String("us-east-1"),
-			},
-		},
-	})
+	stack := createTestPipelineStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN
@@ -58,18 +53,8 @@ func TestPipelineExists(t *testing.T) {
 func TestPipelineHasSelfMutation(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewPipelineStack(app, "TestPipelineStack", &PipelineStackProps{
-		StackProps: awscdk.StackProps{
-			Env: &awscdk.Environment{
-				Account: jsii.String("123456789012"),
-				Region:  jsii.String("us-east-1"),
-			},
-		},
-	})
+	stack := createTestPipelineStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN

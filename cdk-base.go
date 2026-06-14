@@ -19,16 +19,40 @@ import (
 	"github.com/aws/jsii-runtime-go"
 )
 
+// CdkBaseStackProps defines the properties for the CDK base stack.
+// It extends the standard CDK StackProps with an optional Environment field
+// to support environment-specific resource naming and configuration.
 type CdkBaseStackProps struct {
 	awscdk.StackProps
+	Environment *string
 }
 
+// NewCdkBaseStack creates a new CDK base stack for the Sleep Audio Pipeline.
+// This stack contains all the infrastructure resources needed for the audio processing pipeline:
+// - S3 buckets for input and output storage
+// - DynamoDB table for metadata tracking
+// - Lambda function for audio processing
+// - Step Functions state machine for orchestration
+// - EventBridge rule for event routing
+// - SNS topics for notifications
+// - CloudWatch alarms for monitoring
 func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackProps) awscdk.Stack {
 	var sprops awscdk.StackProps
 	if props != nil {
 		sprops = props.StackProps
 	}
 	stack := awscdk.NewStack(scope, &id, &sprops)
+
+	// Determine environment name for resource naming and tagging
+	environment := "dev"
+	if props != nil && props.Environment != nil {
+		environment = *props.Environment
+	}
+
+	// Apply environment tags to all resources in the stack
+	awscdk.Tags_Of(stack).Add(jsii.String("Environment"), jsii.String(environment), nil)
+	awscdk.Tags_Of(stack).Add(jsii.String("Project"), jsii.String("SleepAudioPipeline"), nil)
+	awscdk.Tags_Of(stack).Add(jsii.String("ManagedBy"), jsii.String("CDK"), nil)
 
 	// Create Input S3 Bucket for raw audio file uploads
 	inputBucket := awss3.NewBucket(stack, jsii.String("SleepAudioInputBucket"), &awss3.BucketProps{
@@ -54,7 +78,7 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	// Create DynamoDB table for storing audio pipeline metadata
 	metadataTable := awsdynamodb.NewTable(stack, jsii.String("SleepAudioMetadataTable"), &awsdynamodb.TableProps{
 		TableName: jsii.String("SleepAudioMetadataTable"),
-		PartitionKey: &awsdynamodb.Attribute{
+		TableName: jsii.String("SleepAudioMetadataTable-" + environment),
 			Name: jsii.String("audioId"),
 			Type: awsdynamodb.AttributeType_STRING,
 		},
@@ -77,7 +101,7 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	// ========== Issue #11: Core audio processing logic with Polly integration ==========
 	audioProcessorFunction := awslambda.NewFunction(stack, jsii.String("SleepAudioProcessor"), &awslambda.FunctionProps{
 		FunctionName: jsii.String("SleepAudioProcessor"),
-		Runtime:      awslambda.Runtime_PYTHON_3_12(),
+		FunctionName: jsii.String("SleepAudioProcessor-" + environment),
 		Handler:      jsii.String("handler.lambda_handler"),
 		Code:         awslambda.Code_FromAsset(jsii.String("lambda/audio-processor"), nil),
 		Environment: &map[string]*string{
@@ -185,14 +209,14 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 
 	// Create SNS topic for successful pipeline completion
 	completionTopic := awssns.NewTopic(stack, jsii.String("SleepAudioPipelineCompleted"), &awssns.TopicProps{
-		TopicName:   jsii.String("SleepAudioPipelineCompleted"),
+		TopicName:   jsii.String("SleepAudioPipelineCompleted-" + environment),
 		DisplayName: jsii.String("Sleep Audio Pipeline Completed Notifications"),
 		MasterKey:   snsEncryptionKey,
 	})
 
 	// Create SNS topic for pipeline failures
 	failureTopic := awssns.NewTopic(stack, jsii.String("SleepAudioPipelineFailed"), &awssns.TopicProps{
-		TopicName:   jsii.String("SleepAudioPipelineFailed"),
+		TopicName:   jsii.String("SleepAudioPipelineFailed-" + environment),
 		DisplayName: jsii.String("Sleep Audio Pipeline Failed Notifications"),
 		MasterKey:   snsEncryptionKey,
 	})
@@ -333,7 +357,7 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	// This state machine orchestrates the complete end-to-end pipeline
 	stateMachine := awsstepfunctions.NewStateMachine(stack, jsii.String("SleepAudioPipelineStateMachine"), &awsstepfunctions.StateMachineProps{
 		StateMachineName: jsii.String("SleepAudioPipelineStateMachine"),
-		DefinitionBody:   awsstepfunctions.DefinitionBody_FromChainable(definition),
+		StateMachineName: jsii.String("SleepAudioPipelineStateMachine-" + environment),
 		StateMachineType: awsstepfunctions.StateMachineType_STANDARD,
 		Logs: &awsstepfunctions.LogOptions{
 			Destination: stateMachineLogGroup,
@@ -354,7 +378,7 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	// Create CloudWatch Alarm for state machine execution failures
 	awscloudwatch.NewAlarm(stack, jsii.String("StateMachineExecutionFailedAlarm"), &awscloudwatch.AlarmProps{
 		AlarmName:          jsii.String("SleepAudioPipeline-ExecutionsFailed"),
-		AlarmDescription:   jsii.String("Alert when Step Functions executions fail"),
+		AlarmName:          jsii.String("SleepAudioPipeline-ExecutionsFailed-" + environment),
 		Metric: awscloudwatch.NewMetric(&awscloudwatch.MetricProps{
 			Namespace:          jsii.String("AWS/States"),
 			MetricName:         jsii.String("ExecutionsFailed"),
@@ -373,7 +397,7 @@ func NewCdkBaseStack(scope constructs.Construct, id string, props *CdkBaseStackP
 	// Create CloudWatch Alarm for Lambda function errors
 	awscloudwatch.NewAlarm(stack, jsii.String("LambdaErrorAlarm"), &awscloudwatch.AlarmProps{
 		AlarmName:          jsii.String("SleepAudioProcessor-Errors"),
-		AlarmDescription:   jsii.String("Alert when Lambda function errors exceed threshold"),
+		AlarmName:          jsii.String("SleepAudioProcessor-Errors-" + environment),
 		Metric: awscloudwatch.NewMetric(&awscloudwatch.MetricProps{
 			Namespace:          jsii.String("AWS/Lambda"),
 			MetricName:         jsii.String("Errors"),
@@ -447,6 +471,9 @@ func main() {
 // env determines the AWS environment (account+region) in which our stack is to
 // be deployed. For more information see: https://docs.aws.amazon.com/cdk/latest/guide/environments.html
 func env() *awscdk.Environment {
+//
+// By default, this returns nil, making the stack environment-agnostic.
+// For production deployments, uncomment one of the options below.
 	// If unspecified, this stack will be "environment-agnostic".
 	// Account/Region-dependent features and context lookups will not work, but a
 	// single synthesized template can be deployed anywhere.

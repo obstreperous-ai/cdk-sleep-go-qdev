@@ -8,6 +8,27 @@ import (
 	"github.com/aws/jsii-runtime-go"
 )
 
+// Helper functions to reduce test duplication and improve maintainability
+
+// createTestStack creates a new CDK stack for testing purposes
+func createTestStack() (awscdk.App, awscdk.Stack) {
+	app := awscdk.NewApp(nil)
+	stack := NewCdkBaseStack(app, "TestStack", nil)
+	return app, stack
+}
+
+// createTestStackWithEnvironment creates a new CDK stack with a specific environment
+func createTestStackWithEnvironment(env string) (awscdk.App, awscdk.Stack) {
+	app := awscdk.NewApp(nil)
+	stack := NewCdkBaseStack(app, "TestStack", &CdkBaseStackProps{
+		StackProps:  awscdk.StackProps{},
+		Environment: jsii.String(env),
+	})
+	return app, stack
+}
+
+// Test suite for CDK base stack
+
 // TestCdkBaseStackCreation verifies that the stack can be created without errors
 func TestCdkBaseStackCreation(t *testing.T) {
 	defer jsii.Close()
@@ -30,11 +51,8 @@ func TestCdkBaseStackCreation(t *testing.T) {
 func TestSleepAudioInputBucket(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", nil)
+	_, stack := createTestStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN
@@ -73,11 +91,8 @@ func TestSleepAudioInputBucket(t *testing.T) {
 func TestSleepAudioOutputBucket(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", nil)
+	_, stack := createTestStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN
@@ -108,11 +123,8 @@ func TestSleepAudioOutputBucket(t *testing.T) {
 func TestEventBridgeRule(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", nil)
+	_, stack := createTestStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN
@@ -133,11 +145,8 @@ func TestEventBridgeRule(t *testing.T) {
 func TestStackSnapshot(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", nil)
+	_, stack := createTestStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN - Basic sanity check that template is not empty
@@ -151,11 +160,8 @@ func TestStackSnapshot(t *testing.T) {
 func TestStepFunctionsStateMachineExists(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", nil)
+	_, stack := createTestStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN
@@ -167,11 +173,8 @@ func TestStepFunctionsStateMachineExists(t *testing.T) {
 func TestStepFunctionsStateMachineHasPollyTask(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", nil)
+	_, stack := createTestStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN
@@ -192,11 +195,8 @@ func TestStepFunctionsStateMachineHasPollyTask(t *testing.T) {
 func TestStepFunctionsStateMachineHasCloudWatchLogs(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", nil)
+	_, stack := createTestStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN
@@ -212,11 +212,8 @@ func TestStepFunctionsStateMachineHasCloudWatchLogs(t *testing.T) {
 func TestStepFunctionsExecutionRoleHasPollyPermissions(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", nil)
+	_, stack := createTestStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN
@@ -237,11 +234,8 @@ func TestStepFunctionsExecutionRoleHasPollyPermissions(t *testing.T) {
 func TestEventBridgeRuleTargetsStateMachine(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", nil)
+	_, stack := createTestStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN
@@ -263,11 +257,8 @@ func TestEventBridgeRuleTargetsStateMachine(t *testing.T) {
 func TestDynamoDBMetadataTableExists(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", nil)
+	_, stack := createTestStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN
@@ -279,11 +270,8 @@ func TestDynamoDBMetadataTableExists(t *testing.T) {
 func TestDynamoDBTableHasCorrectSchema(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", nil)
+	_, stack := createTestStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN
@@ -308,11 +296,8 @@ func TestDynamoDBTableHasCorrectSchema(t *testing.T) {
 func TestDynamoDBTableHasEncryption(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", nil)
+	_, stack := createTestStack()
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN
@@ -328,10 +313,7 @@ func TestDynamoDBTableHasEncryption(t *testing.T) {
 func TestDynamoDBTableHasOnDemandBilling(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -346,10 +328,7 @@ func TestDynamoDBTableHasOnDemandBilling(t *testing.T) {
 func TestDynamoDBTableHasPointInTimeRecovery(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -366,10 +345,7 @@ func TestDynamoDBTableHasPointInTimeRecovery(t *testing.T) {
 func TestStateMachineHasDynamoDBTask(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -391,10 +367,7 @@ func TestStateMachineHasDynamoDBTask(t *testing.T) {
 func TestStateMachineRoleHasDynamoDBPermissions(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -420,10 +393,7 @@ func TestStateMachineRoleHasDynamoDBPermissions(t *testing.T) {
 func TestSNSTopicsExist(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -436,10 +406,7 @@ func TestSNSTopicsExist(t *testing.T) {
 func TestSNSTopicsHaveEncryption(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -458,10 +425,7 @@ func TestSNSTopicsHaveEncryption(t *testing.T) {
 func TestStateMachineHasSNSPublishTasks(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -483,10 +447,7 @@ func TestStateMachineHasSNSPublishTasks(t *testing.T) {
 func TestStateMachineHasErrorHandling(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -508,10 +469,7 @@ func TestStateMachineHasErrorHandling(t *testing.T) {
 func TestStateMachineRoleHasSNSPublishPermissions(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -533,10 +491,7 @@ func TestStateMachineRoleHasSNSPublishPermissions(t *testing.T) {
 func TestDynamoDBUpdateTasksForFailure(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -560,10 +515,7 @@ func TestDynamoDBUpdateTasksForFailure(t *testing.T) {
 func TestLambdaFunctionExists(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -576,10 +528,7 @@ func TestLambdaFunctionExists(t *testing.T) {
 func TestLambdaFunctionConfiguration(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -602,10 +551,7 @@ func TestLambdaFunctionConfiguration(t *testing.T) {
 func TestLambdaFunctionHasExecutionRole(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -624,10 +570,7 @@ func TestLambdaFunctionHasExecutionRole(t *testing.T) {
 func TestLambdaExecutionRoleHasDynamoDBPermissions(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -651,10 +594,7 @@ func TestLambdaExecutionRoleHasDynamoDBPermissions(t *testing.T) {
 func TestStateMachineHasLambdaInvokeTask(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -676,10 +616,7 @@ func TestStateMachineHasLambdaInvokeTask(t *testing.T) {
 func TestStateMachineRoleCanInvokeLambda(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -703,10 +640,7 @@ func TestStateMachineRoleCanInvokeLambda(t *testing.T) {
 func TestCompletePipelineWiring(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -744,10 +678,7 @@ func TestCompletePipelineWiring(t *testing.T) {
 func TestStateMachineHasProperTaskChain(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -770,10 +701,7 @@ func TestStateMachineHasProperTaskChain(t *testing.T) {
 func TestLambdaHasInputValidation(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -792,10 +720,7 @@ func TestLambdaHasInputValidation(t *testing.T) {
 func TestStateMachineErrorHandlingWithCatch(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -817,10 +742,7 @@ func TestStateMachineErrorHandlingWithCatch(t *testing.T) {
 func TestErrorPathUpdatesStatusToFailed(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -841,11 +763,8 @@ func TestErrorPathUpdatesStatusToFailed(t *testing.T) {
 
 // TestSuccessPathUpdatesStatusToCompleted verifies success path updates DynamoDB correctly
 func TestSuccessPathUpdatesStatusToCompleted(t *testing.T) {
-	defer jsii.Close()
-
-	// GIVEN
 	app := awscdk.NewApp(nil)
-
+	_, stack := createTestStack()
 	// WHEN
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
@@ -867,11 +786,8 @@ func TestSuccessPathUpdatesStatusToCompleted(t *testing.T) {
 
 // TestAllIAMPermissionsAreLeastPrivilege verifies IAM permissions across all services
 func TestAllIAMPermissionsAreLeastPrivilege(t *testing.T) {
-	defer jsii.Close()
-
-	// GIVEN
 	app := awscdk.NewApp(nil)
-
+	_, stack := createTestStack()
 	// WHEN
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
@@ -892,11 +808,8 @@ func TestAllIAMPermissionsAreLeastPrivilege(t *testing.T) {
 
 // TestCompleteStackSnapshot creates a comprehensive snapshot of the integrated stack
 func TestCompleteStackSnapshot(t *testing.T) {
-	defer jsii.Close()
-
-	// GIVEN
 	app := awscdk.NewApp(nil)
-
+	_, stack := createTestStack()
 	// WHEN
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
@@ -951,13 +864,7 @@ func TestMultiEnvironmentStackCreation(t *testing.T) {
 func TestEnvironmentSpecificResourceNaming(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", &CdkBaseStackProps{
-		StackProps:  awscdk.StackProps{},
-		Environment: jsii.String("dev"),
+	_, stack := createTestStackWithEnvironment("dev")
 	})
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -972,14 +879,8 @@ func TestEnvironmentSpecificResourceNaming(t *testing.T) {
 func TestEnvironmentSpecificTags(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
 	// WHEN
-	stack := NewCdkBaseStack(app, "TestStack", &CdkBaseStackProps{
-		StackProps:  awscdk.StackProps{},
-		Environment: jsii.String("prod"),
-	})
+	_, stack := createTestStackWithEnvironment("prod")
 	template := assertions.Template_FromStack(stack, nil)
 
 	// THEN
@@ -998,10 +899,7 @@ func TestEnvironmentSpecificTags(t *testing.T) {
 func TestStackOutputsIncludeAllResources(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 	templateJSON := template.ToJSON()
@@ -1031,10 +929,7 @@ func TestStackOutputsIncludeAllResources(t *testing.T) {
 func TestEndToEndPipelineIntegration(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -1095,10 +990,7 @@ func TestEndToEndPipelineIntegration(t *testing.T) {
 func TestStateMachineTimeout(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -1115,10 +1007,7 @@ func TestStateMachineTimeout(t *testing.T) {
 func TestLambdaTaskHasRetryPolicy(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -1140,10 +1029,7 @@ func TestLambdaTaskHasRetryPolicy(t *testing.T) {
 func TestPollyTaskHasRetryPolicy(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -1166,10 +1052,7 @@ func TestPollyTaskHasRetryPolicy(t *testing.T) {
 func TestDynamoDBTasksHaveRetryPolicy(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -1190,11 +1073,8 @@ func TestDynamoDBTasksHaveRetryPolicy(t *testing.T) {
 
 // TestErrorHandlingCatchesSpecificErrorTypes verifies specific error types are caught
 func TestErrorHandlingCatchesSpecificErrorTypes(t *testing.T) {
-	defer jsii.Close()
-
-	// GIVEN
 	app := awscdk.NewApp(nil)
-
+	_, stack := createTestStack()
 	// WHEN
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
@@ -1216,11 +1096,8 @@ func TestErrorHandlingCatchesSpecificErrorTypes(t *testing.T) {
 
 // TestLambdaFunctionHasXRayTracingEnabled verifies Lambda has X-Ray tracing
 func TestLambdaFunctionHasXRayTracingEnabled(t *testing.T) {
-	defer jsii.Close()
-
-	// GIVEN
 	app := awscdk.NewApp(nil)
-
+	_, stack := createTestStack()
 	// WHEN
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
@@ -1236,11 +1113,8 @@ func TestLambdaFunctionHasXRayTracingEnabled(t *testing.T) {
 
 // TestStateMachineHasXRayTracingEnabled verifies state machine has X-Ray tracing
 func TestStateMachineHasXRayTracingEnabled(t *testing.T) {
-	defer jsii.Close()
-
-	// GIVEN
 	app := awscdk.NewApp(nil)
-
+	_, stack := createTestStack()
 	// WHEN
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
@@ -1256,11 +1130,8 @@ func TestStateMachineHasXRayTracingEnabled(t *testing.T) {
 
 // TestCloudWatchAlarmsExistForStateMachine verifies alarms are created for failures
 func TestCloudWatchAlarmsExistForStateMachine(t *testing.T) {
-	defer jsii.Close()
-
-	// GIVEN
 	app := awscdk.NewApp(nil)
-
+	_, stack := createTestStack()
 	// WHEN
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
@@ -1272,11 +1143,8 @@ func TestCloudWatchAlarmsExistForStateMachine(t *testing.T) {
 
 // TestCloudWatchAlarmsConfiguredForCriticalMetrics verifies alarms monitor key metrics
 func TestCloudWatchAlarmsConfiguredForCriticalMetrics(t *testing.T) {
-	defer jsii.Close()
-
-	// GIVEN
 	app := awscdk.NewApp(nil)
-
+	_, stack := createTestStack()
 	// WHEN
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
@@ -1295,10 +1163,7 @@ func TestCloudWatchAlarmsConfiguredForCriticalMetrics(t *testing.T) {
 func TestLambdaHasOutputBucketWritePermissions(t *testing.T) {
 	defer jsii.Close()
 
-	// GIVEN
-	app := awscdk.NewApp(nil)
-
-	// WHEN
+	_, stack := createTestStack()
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
 
@@ -1319,11 +1184,8 @@ func TestLambdaHasOutputBucketWritePermissions(t *testing.T) {
 }
 
 // TestLambdaHasPollyPermissions verifies Lambda can invoke Polly for audio synthesis
-func TestLambdaHasPollyPermissions(t *testing.T) {
-	defer jsii.Close()
-
 	// GIVEN
-	app := awscdk.NewApp(nil)
+	_, stack := createTestStack()
 
 	// WHEN
 	stack := NewCdkBaseStack(app, "TestStack", nil)
@@ -1344,11 +1206,8 @@ func TestLambdaHasPollyPermissions(t *testing.T) {
 }
 
 // TestLambdaHasOutputBucketEnvironmentVariable verifies Lambda has output bucket name in env
-func TestLambdaHasOutputBucketEnvironmentVariable(t *testing.T) {
-	defer jsii.Close()
-
 	// GIVEN
-	app := awscdk.NewApp(nil)
+	_, stack := createTestStack()
 
 	// WHEN
 	stack := NewCdkBaseStack(app, "TestStack", nil)
@@ -1368,11 +1227,8 @@ func TestLambdaHasOutputBucketEnvironmentVariable(t *testing.T) {
 }
 
 // TestLambdaProcessingConfigurationForAudio verifies Lambda has adequate resources
-func TestLambdaProcessingConfigurationForAudio(t *testing.T) {
-	defer jsii.Close()
-
 	// GIVEN
-	app := awscdk.NewApp(nil)
+	_, stack := createTestStack()
 
 	// WHEN
 	stack := NewCdkBaseStack(app, "TestStack", nil)
@@ -1387,11 +1243,8 @@ func TestLambdaProcessingConfigurationForAudio(t *testing.T) {
 }
 
 // TestOutputHandlingEndToEnd verifies complete output handling flow
-func TestOutputHandlingEndToEnd(t *testing.T) {
-	defer jsii.Close()
-
 	// GIVEN
-	app := awscdk.NewApp(nil)
+	_, stack := createTestStack()
 
 	// WHEN
 	stack := NewCdkBaseStack(app, "TestStack", nil)
@@ -1419,11 +1272,8 @@ func TestOutputHandlingEndToEnd(t *testing.T) {
 // TestCompleteEndToEndPipelineValidation performs comprehensive validation of the entire pipeline
 // This test validates that all components work together to form a complete, production-ready system
 func TestCompleteEndToEndPipelineValidation(t *testing.T) {
-	defer jsii.Close()
-
-	// GIVEN
 	app := awscdk.NewApp(nil)
-
+	_, stack := createTestStack()
 	// WHEN
 	stack := NewCdkBaseStack(app, "TestStack", nil)
 	template := assertions.Template_FromStack(stack, nil)
